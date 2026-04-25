@@ -30,8 +30,9 @@ def _jsonl_count(path: Path) -> int:
     return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _canonical_text_sha256(path: Path) -> str:
+    payload = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _check(condition: bool, message: str, errors: list[str]) -> None:
@@ -81,7 +82,7 @@ def _verify_dataset(root: Path, dataset_name: str, errors: list[str]) -> None:
             )
             expected_hash = checksums.get(key) if isinstance(checksums, dict) else None
             if expected_hash:
-                actual_hash = _sha256(target)
+                actual_hash = _canonical_text_sha256(target)
                 _check(
                     actual_hash == expected_hash,
                     f"sha256 mismatch for {target}: expected {expected_hash}, found {actual_hash}",

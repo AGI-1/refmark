@@ -1,0 +1,2 @@
+refmark_train/data/**/*.json text eol=lf
+refmark_train/data/**/*.jsonl text eol=lf
