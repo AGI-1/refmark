@@ -182,9 +182,9 @@ the hypothesis is already solved.
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - [examples/README.md](examples/README.md)
 - [docs/MCP_USAGE.md](docs/MCP_USAGE.md)
-- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
 - [docs/CURRENT_BENCHMARK_SNAPSHOT.md](docs/CURRENT_BENCHMARK_SNAPSHOT.md)
 - [docs/TRAINING_PROTOTYPE.md](docs/TRAINING_PROTOTYPE.md)
+- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
 
 ## Reproducibility Notes
 
