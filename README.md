@@ -1,7 +1,4 @@
 ![Refmark banner](refmark.png)
-
-# [refmark]
-
 Stable addressable space for AI models. Cheaper evaluation, resolvable
 hallucination-resistant citations, and MCP tools for stable multi-diff file
 edits.
