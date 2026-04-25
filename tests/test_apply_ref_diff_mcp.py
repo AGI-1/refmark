@@ -515,6 +515,31 @@ def loud(name: str) -> str:
     assert "[@" not in content
 
 
+def test_marker_examples_in_python_strings_do_not_trigger_live_namespace(tmp_path: Path):
+    path = tmp_path / "marker_examples.py"
+    path.write_text(
+        '''MARKER_HINT = "# [@F04]"
+XML_HINT = '<block id="F04"/>'
+LEGACY_HINT = "# @ref:04"
+
+
+def describe_marker() -> str:
+    return MARKER_HINT
+''',
+        encoding="utf-8",
+    )
+
+    listed = list_ref_regions_tool(str(path))
+    read = read_refmarked_file_tool(str(path))
+
+    assert listed["ok"] is True
+    assert listed["namespace_mode"] == "shadow"
+    assert listed["shadow_persistent"] is True
+    assert listed["regions"]
+    assert read["namespace_mode"] == "shadow"
+    assert read["marker_count"] >= 1
+
+
 def test_read_refmarked_file_and_list_regions_use_live_namespace_for_marked_file(tmp_path: Path):
     path = _make_marked_typescript_file(tmp_path)
 

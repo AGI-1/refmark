@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -510,8 +511,40 @@ def _resolve_insert_index(
     return int(block["line_start"]) - 1
 
 
-def _detect_premarked(content: str) -> bool:
-    return "[@" in content or "<block id=" in content or "@ref:" in content
+def _detect_premarked(content: str, marker_format: str | None = None) -> bool:
+    """Return true only when content contains parseable live refmark blocks."""
+    marker_formats = [marker_format] if marker_format else [
+        "typed_comment_py",
+        "typed_comment_ts",
+        "comment_py",
+        "comment_ts",
+        "typed_explicit",
+        "typed_compact",
+        "typed_xml",
+        "xml",
+        "typed_bracket",
+        "bracket",
+    ]
+    return any(_has_live_marker_at_line_start(content, fmt) for fmt in marker_formats if fmt)
+
+
+def _has_live_marker_at_line_start(content: str, marker_format: str) -> bool:
+    marker_res = {
+        "typed_comment_py": r"^\s*# \[@[A-Z]+\d+\]\s*$",
+        "typed_comment_ts": r"^\s*// \[@[A-Z]+\d+\]\s*$",
+        "comment_py": r"^\s*# @ref:\d+\s*$",
+        "comment_ts": r"^\s*// @ref:\d+\s*$",
+        "typed_explicit": r"^\s*\[ref:[A-Z]+\d+\]",
+        "typed_compact": r"^\s*\[[A-Z]+\d+\]",
+        "typed_xml": r'^\s*<block id="[A-Z]+\d+"\s*/>',
+        "xml": r'^\s*<block id="[A-Z]*\d+"\s*/>',
+        "typed_bracket": r"^\s*\[@[A-Z]+\d+\]",
+        "bracket": r"^\s*\[@[A-Z]+\d+\]",
+    }
+    marker_re = marker_res.get(marker_format)
+    if marker_re is None:
+        return bool(_parse_blocks_with_mode(content, marker_format, line_mode="marked"))
+    return bool(re.search(marker_re, content, flags=re.IGNORECASE | re.MULTILINE))
 
 
 def _apply_edits_to_lines(
@@ -637,7 +670,7 @@ def apply_refmark_multidiff(
     marker_format = _select_marker_format(path)
     chunker = _select_chunker(path)
     current_content = path.read_text(encoding="utf-8")
-    was_premarked = "[@" in current_content or "<block id=" in current_content or "@ref:" in current_content
+    was_premarked = _detect_premarked(current_content, marker_format=marker_format)
 
     if was_premarked:
         marked_content = current_content
@@ -703,7 +736,7 @@ def apply_ref_diff(
     marker_format = _select_marker_format(path)
     chunker = _select_chunker(path)
     current_content = path.read_text(encoding="utf-8")
-    was_premarked = _detect_premarked(current_content)
+    was_premarked = _detect_premarked(current_content, marker_format=marker_format)
 
     if expect_live_markers is True and not was_premarked:
         return {

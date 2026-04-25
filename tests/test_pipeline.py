@@ -1,0 +1,182 @@
+import json
+import subprocess
+import sys
+
+from refmark.pipeline import (
+    align_region_records,
+    build_region_manifest,
+    evaluate_alignment_coverage,
+    expand_region_context,
+    read_manifest,
+    render_coverage_html,
+    summarize_coverage,
+    write_manifest,
+)
+
+
+def test_build_region_manifest_and_expand_neighbors():
+    _marked, records = build_region_manifest(
+        "Alpha claim.\n\nBeta supporting detail.\n\nGamma conclusion.\n",
+        ".txt",
+        doc_id="doc",
+    )
+
+    assert [record.region_id for record in records] == ["P01", "P02", "P03"]
+    assert records[1].prev_region_id == "P01"
+    assert records[1].next_region_id == "P03"
+    expanded = expand_region_context(records, ["P02"], before=1, after=1)
+    assert [record.region_id for record in expanded] == ["P01", "P02", "P03"]
+
+
+def test_manifest_jsonl_roundtrip(tmp_path):
+    _marked, records = build_region_manifest("One.\n\nTwo.\n", ".txt", doc_id="doc")
+    path = tmp_path / "manifest.jsonl"
+
+    write_manifest(records, path)
+    loaded = read_manifest(path)
+
+    assert [record.to_dict() for record in loaded] == [record.to_dict() for record in records]
+
+
+def test_align_region_records_finds_lexical_overlap():
+    _source_marked, source = build_region_manifest(
+        "Invoices include expedited shipping fees.\n\nRefund windows vary by tier.\n",
+        ".txt",
+        doc_id="source",
+    )
+    _target_marked, target = build_region_manifest(
+        "The expedited shipping fee is added to invoice totals.\n\nEnterprise refunds last 45 days.\n",
+        ".txt",
+        doc_id="target",
+    )
+
+    alignments = align_region_records(source, target, top_k=1)
+
+    assert alignments[0][0].target_region_id == "P01"
+    assert alignments[0][0].score > 0
+    assert "expedited" in alignments[0][0].shared_terms
+
+
+def test_evaluate_alignment_coverage_marks_gaps_and_expansion_gain():
+    _source_marked, source = build_region_manifest(
+        "Expedited shipping requires service credits.\n\nEU data residency is mandatory.\n",
+        ".txt",
+        doc_id="source",
+    )
+    _target_marked, target = build_region_manifest(
+        "Expedited shipping is available.\n\nService credits apply after outages.\n\nData is stored in United States regions.\n",
+        ".txt",
+        doc_id="target",
+    )
+
+    coverage = evaluate_alignment_coverage(source, target, threshold=0.75, expand_after=1)
+    html = render_coverage_html(coverage, title="demo")
+
+    assert coverage[0].status == "covered"
+    assert coverage[0].expanded_score > coverage[0].naive_score
+    assert [record.region_id for record in coverage[0].expanded_targets] == ["P01", "P02"]
+    assert coverage[1].status == "gap"
+    assert summarize_coverage(coverage)["items_improved_by_expansion"] == 1
+    assert "coverage rate" in html
+    assert "Expanded Evidence" in html
+    assert "GAP" in html
+
+
+def test_alignment_normalizes_basic_variants():
+    _source_marked, source = build_region_manifest(
+        "The supplier must encrypt European customer data.\n",
+        ".txt",
+        doc_id="source",
+    )
+    _target_marked, target = build_region_manifest(
+        "Customer data is encrypted in EU regions.\n",
+        ".txt",
+        doc_id="target",
+    )
+
+    alignments = align_region_records(source, target, top_k=1)
+
+    assert alignments[0][0].target_region_id == "P01"
+    assert {"encryption", "europe", "customer", "data"} <= set(alignments[0][0].shared_terms)
+
+
+def test_coverage_flags_numeric_conflicts_but_allows_minimums():
+    _source_marked, source = build_region_manifest(
+        "The battery must provide at least 500 kWh usable capacity.\n\nDelivery must be completed within 90 days.\n",
+        ".txt",
+        doc_id="source",
+    )
+    _target_marked, target = build_region_manifest(
+        "The proposed battery has 520 kWh usable capacity.\n\nDelivery is planned for 120 days.\n",
+        ".txt",
+        doc_id="target",
+    )
+
+    coverage = evaluate_alignment_coverage(source, target, threshold=0.35, expand_after=0)
+
+    assert coverage[0].status == "covered"
+    assert coverage[0].numeric_conflict is False
+    assert coverage[1].status == "gap"
+    assert coverage[1].numeric_conflict is True
+
+
+def test_numeric_conflict_uses_units_with_expanded_context():
+    _source_marked, source = build_region_manifest(
+        "Delivery must be completed within 90 days.\n",
+        ".txt",
+        doc_id="source",
+    )
+    _target_marked, target = build_region_manifest(
+        "Delivery is planned for 120 days.\n\nMaintenance lasts 3 years.\n",
+        ".txt",
+        doc_id="target",
+    )
+
+    coverage = evaluate_alignment_coverage(source, target, threshold=0.35, expand_after=1)
+
+    assert coverage[0].numeric_conflict is True
+    assert coverage[0].status == "gap"
+
+
+def test_pipeline_cli_map_expand_and_align(tmp_path):
+    source = tmp_path / "source.txt"
+    target = tmp_path / "target.txt"
+    manifest = tmp_path / "manifest.jsonl"
+    source.write_text("Expedited shipping is charged.\n\nRefunds vary.\n", encoding="utf-8")
+    target.write_text("Invoice totals include expedited shipping.\n\nRefund policy depends on tier.\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expanded = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "expand",
+            str(manifest),
+            "--refs",
+            "P01",
+            "--after",
+            "1",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    aligned = subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "align", str(source), str(target), "--top-k", "1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    expanded_payload = json.loads(expanded.stdout)
+    aligned_payload = json.loads(aligned.stdout)
+    assert [item["region_id"] for item in expanded_payload] == ["P01", "P02"]
+    assert aligned_payload[0][0]["target_region_id"] == "P01"

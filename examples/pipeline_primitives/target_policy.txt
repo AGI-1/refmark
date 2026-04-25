@@ -1,0 +1,5 @@
+Invoice totals include tax and shipping. Expedited shipping uses a higher shipping fee.
+
+Refunds are available for 30 days by default. Enterprise accounts receive 45 days.
+
+Before greeting or billing a customer, normalize whitespace and title casing in the customer name.

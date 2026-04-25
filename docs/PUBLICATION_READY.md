@@ -1,53 +1,113 @@
-# Release Scope
+# Publication-Ready Scope
 
-This document records what the current proof-of-concept release is meant to
-stand behind. It is not a product roadmap and it is not a claim that Refmark
-solves grounded generation or coding-agent reliability in general.
+This note defines the narrow release shape that is supportable by the current evidence.
 
-## Supported Today
+## Stable Scope To Publish Now
 
-Refmark is strongest as an addressability layer for corpora. The stable public
-surface supports:
+1. Deterministic locate-only citation evaluation with public data-smell metrics
+2. Highlighted source review for cited anchor regions
+3. Stable same-file multi-region edits for Python and TypeScript via `apply_ref_diff`
+4. Corpus-local anchored QA dataset generation and training prototype through `refmark_train`
 
-- deterministic citation-location scoring over returned refs
-- highlighted review of cited source regions
-- data-smell metrics such as wrong-location, overcite, undercite, breadth, and
-  overlap
-- same-file multi-region edits for Python and TypeScript through
-  `apply_ref_diff`
-- retained corpus-local training artifacts for small anchor-localization
-  experiments
+## Supported User Journeys
 
-The important guarantee is narrow and useful: citation targets are real
-resolvable corpus regions. Refmark does not guarantee that the selected region
-is semantically correct.
+### 1. Exact Citations With Bigger Models
 
-## Evidence Level
+Supported today as a research-backed workflow:
 
-The strongest evidence in this release is for deterministic locate-only
-evaluation and human-auditable review. The included examples and tests are
-small, runnable checks for that surface.
+- inject or shadow-mark a corpus
+- run the shipped deterministic smoke and examples
+- score exact/overlap/cover plus overcite, undercite, breadth, and wrong-location behavior on returned refs
+- optionally run second-pass coverage judging
 
-The coding-agent evidence is narrower. Refmark is most plausible for bounded
-same-file edits where the relevant regions are already identified. It should
-not be read as a broad SWE-bench or general coding-agent superiority claim.
+Primary file:
 
-The training evidence is exploratory. `refmark_train` shows that small models
-can be intentionally overfit to a fixed addressable corpus and evaluated
-cheaply. It does not yet prove cross-domain transfer or general small-model
-anchor competence.
+- [CURRENT_BENCHMARK_SNAPSHOT.md](CURRENT_BENCHMARK_SNAPSHOT.md)
+- `refmark/metrics.py`
 
-## Current Boundaries
+Public verification command:
 
-This release intentionally excludes:
+```bash
+python -m refmark.cli smoke
+python examples/citation_qa/run_eval.py
+python examples/data_smells/run.py
+```
 
-- broad benchmark runner infrastructure
-- large historical result dumps
-- raw redistributed source-document payloads
-- claims of universal token savings
-- claims that exact-minimal citation is solved
-- claims that injected anchors already help all model sizes
+Additional evidence that would strengthen this claim:
 
-The public artifact should be read as a focused proof of concept: make the
-corpus addressable, make model references resolvable, and make citation
-behavior measurable enough to audit, score, and diagnose.
+- a larger repeatability study on one stronger model family
+- a denser exact-minimal benchmark (`golden_exact_v1`)
+- transfer to one external QA benchmark with pre-mapped anchors
+
+### 2. Syntax Highlighting For Cited Regions
+
+Supported today as a practical audit workflow:
+
+- resolve returned refs back into clean source windows
+- render text or HTML review artifacts
+- use persistent shadow sessions for unmarked Python/TypeScript files
+- present cited snippets to human reviewers without asking them to hunt line numbers manually
+
+Primary files:
+
+- [GETTING_STARTED.md](GETTING_STARTED.md)
+- [MCP_USAGE.md](MCP_USAGE.md)
+- `refmark/highlight.py`
+
+Additional evidence that would help:
+
+- screenshots or tiny examples in docs
+- one notebook or HTML example for QA review
+
+### 3. Pipeline For Anchored QA Bench Creation From Corpus
+
+Supported today, but should be presented as a prototype pipeline rather than a finalized product:
+
+- ingest local or prepared corpora
+- create anchored datasets
+- export train/valid/reformulated splits
+- rerun lightweight localization experiments
+
+Primary files in the broader research workspace:
+
+- `refmark_train/README.md`
+- `refmark_train/cli.py`
+
+Public verification command:
+
+```bash
+python -m refmark_train.smoke
+```
+
+Additional evidence that would strengthen this path:
+
+- one end-to-end corpus refresh demo
+- one reviewed exported QA set outside the synthetic path
+- one comparison against BM25 on the same corpus-local anchor set
+
+## Not Ready To Publish As A Product Claim
+
+- universal token savings from refmarks
+- universal coding improvement across agents and benchmarks
+- broad SWE-bench superiority
+- small-model citation accuracy improvement as a general result
+- training-prototype transfer advantages across corpora
+
+## Tooling Resilience Expectations
+
+For the current published scope, the tools are resilient enough if we stay inside these boundaries:
+
+- Python and TypeScript only for code-edit workflows
+- same-file edits only for `apply_ref_diff`
+- locate-only citation evaluation rather than free-form answer grading
+- highlighted review over returned refs, not arbitrary semantic span inference
+- `refmark_train` framed as exploratory and corpus-local
+
+## Recommended Publish Position
+
+Publish `refmark` as:
+
+- a research toolkit with a narrow stable surface
+- strong on deterministic locate-only citation evaluation and HiL review
+- promising but still experimental on coding-agent multidiff
+- exploratory on trainable corpus-local anchor prediction

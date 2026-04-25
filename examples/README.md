@@ -11,6 +11,8 @@ python examples/citation_qa/run_eval.py
 python examples/data_smells/run.py
 python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
+python examples/pipeline_primitives/run.py
+python examples/coverage_alignment/run.py
 ```
 
 ## Citation QA
@@ -52,3 +54,24 @@ and missing citation outputs. No LLM judge or API call is used.
 
 Edit `examples/multidiff_demo/good_edits.json` to try your own ref-addressed
 patches.
+
+## Pipeline Primitives
+
+`pipeline_primitives` demonstrates the plug-and-play document surface:
+
+1. map documents into a JSONL region manifest
+2. expand a retrieved region into neighboring context
+3. align source document regions to target document regions
+4. emit a paste-ready prompt that asks a general chat model for cited region ranges
+
+## Coverage Alignment
+
+`coverage_alignment` generates small `.docx` and `.pdf` input documents and
+runs two review flows:
+
+- customer request vs offer/contract
+- tender requirements vs technical specification
+
+The example writes marked text, region manifests, naive and expanded coverage
+JSON, and an HTML review page that highlights covered items and gaps by stable
+Refmark regions.

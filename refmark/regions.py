@@ -453,6 +453,10 @@ def _parse_blocks_with_mode(
         marker_re = re.compile(r'\[@([A-Z]+\d+)\]', re.IGNORECASE)
     elif marker_format == "typed_bracket":
         marker_re = re.compile(r'\[@([A-Z]+\d+)\]', re.IGNORECASE)
+    elif marker_format == "typed_explicit":
+        marker_re = re.compile(r'\[ref:([A-Z]+\d+)\]', re.IGNORECASE)
+    elif marker_format == "typed_compact":
+        marker_re = re.compile(r'\[([A-Z]+\d+)\]', re.IGNORECASE)
     elif marker_format == "typed_xml":
         marker_re = re.compile(r'<block id="([A-Z]+\d+)"/>', re.IGNORECASE)
     elif marker_format == "curly":

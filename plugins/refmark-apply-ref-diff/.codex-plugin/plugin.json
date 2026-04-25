@@ -22,16 +22,16 @@
     "displayName": "Refmark Apply Ref Diff",
     "shortDescription": "Apply region-scoped refmark edits through MCP",
     "longDescription": "Bring the refmark apply_ref_diff primitive into Codex through MCP so agents can target stable semantic regions or explicit ref ranges when making multiple same-file edits.",
-    "developerName": "OpenAI",
+    "developerName": "Boris Imenitov",
     "category": "Coding",
     "capabilities": [
       "Interactive",
       "Read",
       "Write"
     ],
-    "websiteURL": "https://openai.com/",
-    "privacyPolicyURL": "https://openai.com/policies/privacy-policy/",
-    "termsOfServiceURL": "https://openai.com/policies/terms-of-use/",
+    "websiteURL": "https://github.com/b-imenitov/refmark",
+    "privacyPolicyURL": "https://github.com/b-imenitov/refmark",
+    "termsOfServiceURL": "https://github.com/b-imenitov/refmark",
     "defaultPrompt": [
       "Use apply_ref_diff to update several Python or TypeScript regions in one pass"
     ],

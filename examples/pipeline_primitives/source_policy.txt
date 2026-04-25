@@ -1,0 +1,5 @@
+Expedited shipping adds an extra handling fee to invoice totals.
+
+Enterprise customers receive a longer refund window than standard customers.
+
+Customer names should be normalized before they appear on invoices.

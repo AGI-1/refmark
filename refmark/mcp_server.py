@@ -149,7 +149,7 @@ def _get_view_state(path: Path) -> dict[str, Any]:
 
     marker_format = _select_marker_format(path)
     chunker = _select_chunker(path)
-    if _detect_premarked(source):
+    if _detect_premarked(source, marker_format=marker_format):
         return {
             "supported": True,
             "marker_format": marker_format,

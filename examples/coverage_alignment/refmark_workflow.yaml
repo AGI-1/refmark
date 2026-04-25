@@ -1,0 +1,8 @@
+density: balanced
+marker_style: explicit
+include_headings: false
+top_k: 1
+coverage_threshold: 0.4
+expand_before: 0
+expand_after: 1
+numeric_checks: true

@@ -146,6 +146,20 @@ TYPED_BRACKET_FORMAT = make_marker_format(
     file_ext="any",
 )
 
+TYPED_EXPLICIT_FORMAT = make_marker_format(
+    name="typed_explicit",
+    inject_template="[ref:{label}]",
+    strip_pattern=r"\[ref:[A-Z]+\d+\] ?",
+    file_ext="any",
+)
+
+TYPED_COMPACT_FORMAT = make_marker_format(
+    name="typed_compact",
+    inject_template="[{label}]",
+    strip_pattern=r"\[[A-Z]+\d+\] ?",
+    file_ext="any",
+)
+
 HASH_FORMAT = make_marker_format(
     name="hash",
     inject_template="#B{id:02d}",
@@ -216,6 +230,8 @@ def register_builtins() -> None:
     """Register all built-in marker formats."""
     MarkerRegistry.register(BRACKET_FORMAT)
     MarkerRegistry.register(TYPED_BRACKET_FORMAT)
+    MarkerRegistry.register(TYPED_EXPLICIT_FORMAT)
+    MarkerRegistry.register(TYPED_COMPACT_FORMAT)
     MarkerRegistry.register(HASH_FORMAT)
     MarkerRegistry.register(XML_FORMAT)
     MarkerRegistry.register(TYPED_XML_FORMAT)

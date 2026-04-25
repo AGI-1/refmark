@@ -2,6 +2,7 @@ import importlib.util
 
 import pytest
 from refmark.core import inject, strip, inject_legacy, strip_legacy
+from refmark.edit import _detect_premarked
 from refmark.markers import MarkerRegistry, BRACKET_FORMAT, HASH_FORMAT
 from refmark.chunkers import LineChunker, ParagraphChunker, FixedTokenChunker, ASTChunker, get_chunker
 from refmark.regions import apply_refmark_edits, validate_syntax
@@ -277,9 +278,26 @@ if __name__ == "__main__":
         """Test that built-in formats are registered."""
         formats = MarkerRegistry.list_all()
         assert "bracket" in formats
+        assert "typed_explicit" in formats
+        assert "typed_compact" in formats
         assert "hash" in formats
         assert "comment_py" in formats
         assert "comment_md" in formats
+
+    def test_document_marker_styles_roundtrip(self):
+        original = "Alpha paragraph.\n\nBeta paragraph.\n"
+        explicit, _ = inject(original, ".txt", marker_format="typed_explicit", chunker="paragraph")
+        compact, _ = inject(original, ".txt", marker_format="typed_compact", chunker="paragraph")
+
+        assert "[ref:P01]" in explicit
+        assert "[P01]" in compact
+        assert strip(explicit, ".txt", marker_format="typed_explicit") == original
+        assert strip(compact, ".txt", marker_format="typed_compact") == original
+
+    def test_detect_premarked_ignores_marker_examples_in_strings(self):
+        code = 'EXAMPLE = "Use [@P01] to cite a paragraph in prompts."\n'
+
+        assert not _detect_premarked(code, marker_format="typed_bracket")
 
     def test_marker_registry_get_for_ext(self):
         """Test MarkerRegistry.get_for_ext selects correct format."""

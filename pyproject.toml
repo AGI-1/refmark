@@ -14,10 +14,11 @@ dependencies = []
 [project.optional-dependencies]
 mcp = ["mcp>=1.27.0", "pydantic>=2.0"]
 typescript = ["tree-sitter>=0.25.0", "tree-sitter-typescript>=0.23.2"]
+documents = ["pypdf>=4.2"]
 train = ["numpy>=1.26", "requests>=2.31", "torch>=2.2"]
 train-fetch = ["beautifulsoup4>=4.12", "pypdf>=4.2"]
 directml = ["torch-directml"]
-dev = ["pytest>=8.0", "numpy>=1.26", "requests>=2.31"]
+dev = ["pytest>=8.0", "numpy>=1.26", "requests>=2.31", "pypdf>=4.2"]
 
 [project.scripts]
 refmark = "refmark.cli:main"

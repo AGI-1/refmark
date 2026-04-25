@@ -1,14 +1,64 @@
 ![Refmark banner](refmark.png)
-## Refmark
-Refmark is a research toolkit for making corpora addressable to AI systems.
-It injects stable, resolvable anchors into documents or code so models can
-point at source regions by id instead of by fragile prose, copied snippets, or
-line numbers.
+
+# [refmark]
+
+Stable addressable space for AI models. Cheaper evaluation, resolvable
+hallucination-resistant citations, and MCP tools for stable multi-diff file
+edits.
+
+Refmark makes documents and code addressable to AI systems. It injects stable,
+resolvable anchors into source text so models can point at regions by id
+instead of by fragile prose, copied snippets, or drifting line numbers.
+
+## 30-Second Mental Model
+
+Given a document with injected anchors, a model predicts which anchors or
+anchor ranges answer a question. Refmark resolves those ids back to source text
+and scores the citation deterministically, without comparing generated prose.
+
+```text
+Document:
+[@P12] Refunds are available within 30 days.
+[@P13] Expedited shipping is non-refundable.
+
+Question:
+Which clause says expedited shipping is non-refundable?
+
+Model output:
+["P13"]
+
+Refmark resolves:
+P13 -> "Expedited shipping is non-refundable."
+
+Result:
+exact citation match
+```
+
+```mermaid
+flowchart LR
+  A["Document or code"] --> B["Inject anchors"]
+  B --> C["Model predicts refs"]
+  C --> D["Resolve regions"]
+  D --> E["Highlight, score, expand, or edit"]
+```
+
+## Use Refmark For
+
+- **Citation evaluation:** ask a model for refs, then score exact hits,
+  overlap, overcitation, undercitation, and wrong-location errors without an
+  LLM judge.
+- **RAG and review pipelines:** map documents into addressable regions, keep
+  refs as metadata, and expand retrieved hits to neighboring context.
+- **Human-in-the-loop audits:** render highlighted source regions so reviewers
+  inspect what a model actually cited.
+- **Bounded code edits:** target stable same-file regions instead of line
+  numbers when applying multi-region model patches.
 
 This does not guarantee that a model cites the right region. It guarantees a
 different and useful thing: cited regions exist, resolve back to source text,
 and can be audited. For review workflows, an irrelevant citation and a
-fabricated citation are not the same failure. Inspecting for irrelevance is simple.
+fabricated citation are not the same failure. One is inspectable; the other is
+not.
 
 Once a corpus has addresses, citation behavior becomes structured data:
 exact hits, overlap, overcitation, undercitation, wrong-region hits, and
@@ -23,13 +73,15 @@ edits. Instead of asking a model to patch drifting line numbers or copied
 context, Refmark lets tools target explicit regions and apply bounded edits
 through `apply_ref_diff`.
 
-This publish layout keeps the stable surface small and explicit:
+This publish layout keeps the stable surface explicit:
 
 1. deterministic locate-only QA and citation evaluation with data-smell metrics
 2. highlighted review of cited regions for human-in-the-loop audit workflows
 3. stable same-file multi-region editing for Python and TypeScript through `apply_ref_diff`
-4. exploratory corpus-local anchor prediction with retained derived datasets
-5. small deterministic smoke checks that prove the public artifact works locally
+4. lightweight pipeline helpers for paste-ready cited prompts, region manifests,
+   context expansion, and document-to-document region mapping
+5. exploratory corpus-local anchor prediction with retained derived datasets
+6. small deterministic smoke checks that prove the public artifact works locally
 
 ## Included Here
 
@@ -59,7 +111,7 @@ Those remain useful research assets, but they are intentionally outside this cle
 ## Quick Start
 
 ```bash
-pip install -e .[dev,mcp,typescript,train]
+pip install -e .[dev,mcp,typescript,documents,train]
 python -m refmark.cli languages
 python -m refmark.cli smoke
 python -m refmark_train.verify_publish_artifact
@@ -68,6 +120,8 @@ python examples/citation_qa/run_eval.py
 python examples/data_smells/run.py
 python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
+python examples/pipeline_primitives/run.py
+python examples/coverage_alignment/run.py
 pytest
 ```
 
@@ -78,12 +132,56 @@ python -m refmark.cli inject examples/multidiff_demo/source.py --output marked.p
 python -m refmark.cli highlight marked.py --refs F02,F03 --format text
 ```
 
+To make a paste-ready prompt for a general chat model:
+
+```bash
+python -m refmark.cli enrich-prompt docs/policy.md --question "Which regions support the refund policy?"
+```
+
+To build and use a region manifest in a simple retrieval or review pipeline:
+
+```bash
+python -m refmark.cli map docs/policy.md -o .refmark/policy_manifest.jsonl --marked-dir .refmark/marked
+python -m refmark.cli expand .refmark/policy_manifest.jsonl --refs P03 --before 1 --after 1
+python -m refmark.cli align old_policy.docx new_policy.pdf --top-k 2 --coverage-html coverage_review.html
+```
+
+The document workflow can also be driven from Python:
+
+```python
+from refmark.documents import align_documents
+
+report = align_documents(
+    "customer_request.docx",
+    "offer_contract.pdf",
+    density="balanced",
+    marker_style="explicit",
+    include_headings=False,
+)
+report.write_html("coverage_review.html", layout="side-by-side")
+print(report.summary)
+```
+
+For an existing RAG or review system, use `Refmarker` as a pass-through
+addressability layer. Shadow mode keeps your source unchanged and stores the
+marked view plus manifest in `.refmark/registry`.
+
+```python
+from refmark import Refmarker
+
+marker = Refmarker(mode="shadow")
+result = marker.mark_text(policy_text, doc_id="policy")
+
+prompt_context = result.marked_view
+stable_regions = result.records
+```
+
 ## Core Workflow
 
 Models can output raw citation refs such as:
 
 ```json
-["F03", "F04"]
+["F03", "F04-F05"]
 ```
 
 Refmark then makes that output auditable and measurable:
@@ -155,6 +253,8 @@ The current evidence is strongest for:
   review
 - stable same-file anchored edits for bounded Python and TypeScript workflows
 - data-smell diagnostics from wrong-region, broad, and scattered citations
+- lightweight document pipeline primitives such as prompt enrichment, manifest
+  generation, neighbor expansion, and lexical region mapping
 
 The current evidence is more limited for:
 
@@ -182,9 +282,10 @@ the hypothesis is already solved.
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - [examples/README.md](examples/README.md)
 - [docs/MCP_USAGE.md](docs/MCP_USAGE.md)
+- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
+- [docs/PRODUCTIZATION_TASKS.md](docs/PRODUCTIZATION_TASKS.md)
 - [docs/CURRENT_BENCHMARK_SNAPSHOT.md](docs/CURRENT_BENCHMARK_SNAPSHOT.md)
 - [docs/TRAINING_PROTOTYPE.md](docs/TRAINING_PROTOTYPE.md)
-- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
 
 ## Reproducibility Notes
 
@@ -197,6 +298,7 @@ publicly runnable checks are:
 - `python examples/citation_qa/run_eval.py`
 - `python examples/data_smells/run.py`
 - `python examples/judge_free_rewards/run.py`
+- `python examples/pipeline_primitives/run.py`
 - `pytest`
 
 The training prototype includes derived datasets and run summaries. Raw and
@@ -209,8 +311,7 @@ rebuild that corpus from canonical upstream URLs.
 Refmark should currently be presented as:
 
 - strong on deterministic locate-only citation evaluation and HiL review
+- practical as a small plug-in layer for cited prompts and region manifests
 - practical for bounded same-file anchored edits
 - promising but still experimental for broader coding-agent claims
 - exploratory on trainable corpus-local anchor prediction
-
-Primary repository: https://github.com/b-imenitov/refmark

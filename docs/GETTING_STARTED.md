@@ -25,7 +25,13 @@ pip install -e .[typescript]
 For the full public-artifact test surface:
 
 ```bash
-pip install -e .[dev,mcp,typescript,train]
+pip install -e .[dev,mcp,typescript,documents,train]
+```
+
+If you only need DOCX/PDF document workflows:
+
+```bash
+pip install -e .[documents]
 ```
 
 If you want only the exploratory training prototype:
@@ -84,6 +90,18 @@ Run the judge-free reward playground:
 
 ```bash
 python examples/judge_free_rewards/run.py
+```
+
+Run the plug-and-play pipeline primitive playground:
+
+```bash
+python examples/pipeline_primitives/run.py
+```
+
+Run the DOCX/PDF coverage-alignment playground:
+
+```bash
+python examples/coverage_alignment/run.py
 ```
 
 These examples write inspectable artifacts under their local `output/`
@@ -179,11 +197,89 @@ Write an HTML audit artifact:
 python -m refmark.cli highlight path/to/example.py --refs F03,F05-F06 --format html --output cited_regions.html
 ```
 
+## Build A Paste-Ready Cited Prompt
+
+Wrap a document with region markers and citation instructions for a general
+chat model:
+
+```bash
+python -m refmark.cli enrich-prompt docs/policy.md --question "Which regions support the refund policy?"
+```
+
+The model can then cite single regions like `[P03]`, contiguous ranges like
+`[P03-P05]`, or non-contiguous sets like `[P03,P08]`.
+
+## Map And Expand Document Regions
+
+Create a JSONL manifest of addressable regions:
+
+```bash
+python -m refmark.cli map docs/policy.md -o .refmark/policy_manifest.jsonl --marked-dir .refmark/marked
+```
+
+Expand a retrieved region into neighboring context for RAG-style pipelines:
+
+```bash
+python -m refmark.cli expand .refmark/policy_manifest.jsonl --refs P03 --before 1 --after 1
+```
+
+Map source document regions to likely target document regions with a small
+deterministic lexical baseline:
+
+```bash
+python -m refmark.cli align old_policy.docx new_policy.pdf --top-k 2 --coverage-html coverage_review.html
+```
+
+This works for simple text, Markdown, DOCX, and PDF inputs. DOCX extraction is
+plain OOXML text extraction; PDF extraction uses `pypdf`.
+
+For repeatable workflows, put the knobs in a flat YAML file:
+
+```yaml
+density: balanced
+marker_style: explicit
+include_headings: false
+coverage_threshold: 0.4
+expand_after: 1
+numeric_checks: true
+```
+
+Then run:
+
+```bash
+python -m refmark.cli align request.docx offer.pdf --config refmark_workflow.yaml --coverage-html coverage_review.html --summary-json coverage_summary.json
+```
+
+From Python:
+
+```python
+from refmark.documents import align_documents
+
+report = align_documents("request.docx", "offer.pdf", density="balanced", marker_style="explicit")
+report.write_html("coverage_review.html", layout="side-by-side")
+print(report.summary)
+```
+
+For library integration into an existing pipeline:
+
+```python
+from refmark import Refmarker
+
+marker = Refmarker(mode="shadow")
+result = marker.mark_text(policy_text, doc_id="policy")
+
+# Use marked_view for prompts/citations; keep content as your original source.
+prompt_context = result.marked_view
+regions = result.records
+```
+
 ## What To Expect
 
 - Python and TypeScript are the current productized language set
 - Markdown and generic text helpers exist in core primitives, but they are not the supported code-editing product surface yet
 - Marker-based editing is strongest on same-file, multi-region changes
+- `map`, `expand`, `align`, and `enrich-prompt` are lightweight pipeline helpers, not a full retrieval database
+- `Refmarker(mode="shadow")` is the small library surface for persistent marked views without mutating source data
 - `apply-ref-diff` works directly on live-marked files; use the MCP server or `scripts/refmark_shadow_session_cli.py` for persistent shadow sessions on unmarked files
 - Highlighted source review is ready for HIL citation audits
 - The broader benchmark harness is research infrastructure and is not included in this public PoC CLI
