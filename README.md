@@ -212,3 +212,5 @@ Refmark should currently be presented as:
 - practical for bounded same-file anchored edits
 - promising but still experimental for broader coding-agent claims
 - exploratory on trainable corpus-local anchor prediction
+
+Primary repository: https://github.com/b-imenitov/refmark
