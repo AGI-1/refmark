@@ -13,6 +13,7 @@ python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
+python examples/rag_retrieval_benchmark/run.py
 ```
 
 ## Citation QA
@@ -75,3 +76,11 @@ runs two review flows:
 The example writes marked text, region manifests, naive and expanded coverage
 JSON, and an HTML review page that highlights covered items and gaps by stable
 Refmark regions.
+
+## RAG Retrieval Benchmark
+
+`rag_retrieval_benchmark` compares naive fixed-window chunks with Refmark
+regions, deterministic neighbor expansion, train-question-enriched region
+retrieval, cached generated retrieval views, and synthetic distractor scaling
+over the retained training corpus. It reports hit@k, MRR, token cost, returned
+refs, and sample misses.
