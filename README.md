@@ -1,8 +1,5 @@
 ![Refmark banner](refmark.png)
-Stable addressable space for AI models. Cheaper evaluation, resolvable
-hallucination-resistant citations, and MCP tools for stable multi-diff file
-edits.
-
+##Refmark
 Refmark is a research toolkit for making corpora addressable to AI systems.
 It injects stable, resolvable anchors into documents or code so models can
 point at source regions by id instead of by fragile prose, copied snippets, or
