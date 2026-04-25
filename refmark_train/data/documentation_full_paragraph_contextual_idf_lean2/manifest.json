@@ -1,0 +1,28 @@
+{
+  "anchor_count": 955,
+  "train_examples": 3820,
+  "valid_examples": 3820,
+  "reformulated_examples": 7640,
+  "files": {
+    "anchors": "anchors.jsonl",
+    "train": "train.jsonl",
+    "valid": "valid.jsonl",
+    "reformulated": "reformulated.jsonl"
+  },
+  "source": "../../source_docs/sets/documentation_set.txt",
+  "unit": "paragraph",
+  "paragraph_window": 1,
+  "stride": 1,
+  "seed": 17,
+  "question_mode": "contextual",
+  "train_mutations": 0,
+  "train_questions_per_phrase": 2,
+  "valid_questions_per_phrase": 2,
+  "reform_questions_per_phrase": 4,
+  "file_sha256": {
+    "anchors": "09a42b09427ceaaf5dd03b5c771e60d2f0e0addc153d9d84efe4bc0924e5c5ef",
+    "train": "ce3a1adc1ed80cf6b899360cb2ba6449dd51b156cf144153b050f4f1f19ea318",
+    "valid": "b258b9757978b0cb5269cf23c36c3be3723b744e66b1e4983fef0d219d06eae2",
+    "reformulated": "3b84b3fdfc851f6d7648d6887c43d4698023e04a12b20c9938623764a892fa2d"
+  }
+}

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refmark-train"
+version = "0.1.0"
+description = "Publishable refmark citation-localization experiment artifact"
+requires-python = ">=3.10"
+readme = "README.md"
+license = {file = "LICENSE"}
+dependencies = [
+  "numpy>=1.26",
+  "requests>=2.31",
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+fetch = [
+  "beautifulsoup4>=4.12",
+  "pypdf>=4.2",
+]
+directml = [
+  "torch-directml",
+]
+
+[project.scripts]
+refmark-train = "refmark_train.cli:main"
+refmark-train-verify = "refmark_train.verify_publish_artifact:main"
+
+[tool.setuptools]
+packages = ["refmark_train"]
+
+[tool.setuptools.package-dir]
+refmark_train = "."

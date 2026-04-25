@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "refmark-apply-ref-diff": {
+      "command": "python",
+      "args": [
+        "-m",
+        "refmark.mcp_server"
+      ],
+      "env": {
+        "PYTHONPATH": "../.."
+      }
+    }
+  }
+}

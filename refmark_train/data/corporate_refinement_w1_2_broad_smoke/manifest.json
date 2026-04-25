@@ -1,0 +1,40 @@
+{
+  "anchor_count": 399,
+  "train_examples": 780,
+  "valid_examples": 120,
+  "reformulated_examples": 120,
+  "files": {
+    "anchors": "anchors.jsonl",
+    "train": "train.jsonl",
+    "valid": "valid.jsonl",
+    "reformulated": "reformulated.jsonl"
+  },
+  "source_data_dir": "historical:corporate_structure_random",
+  "lineage": {
+    "derived_from_dataset": "historical:corporate_structure_random",
+    "benchmark_role": "cross-domain refinement smoke benchmark",
+    "curation_note": "This retained smoke benchmark is derived from the archived corporate anchor dataset and is kept to document current cross-domain limits."
+  },
+  "refinement_dataset": {
+    "max_examples": 60,
+    "precise_min_width": 1,
+    "precise_max_width": 2,
+    "broad_margin_min": 1,
+    "broad_margin_max": 3,
+    "seed": 23,
+    "selected_examples": 60,
+    "pattern": "request -> broad range, then request+broad range -> precise range",
+    "generation_rules": [
+      "Broad examples ask for surrounding context and intentionally target a wider covering contiguous range.",
+      "Precise examples target a narrower contiguous sub-range inside the broad range.",
+      "Refinement prompts include a summary of the broad range and ask to narrow to only the needed anchors.",
+      "The same recipe is intended to be reusable across anchored corpora."
+    ]
+  },
+  "file_sha256": {
+    "anchors": "4455a4b40d3b510d1248f13d3ce1b8ef3ed3a48d69600e8951c7e96b96804183",
+    "train": "9bdfeb69acfb84201a6740cdcc92aa8168926a06aa78501f5821721713e7ba0e",
+    "valid": "6a67a4bc2ff95c622edc44f52f1856ceb7878615d2b2e5d29dcfe39de5fc31d7",
+    "reformulated": "712c54f037def5e62c1a3a6aedc267b6845ceeeddba908c347eb815ceb1bf903"
+  }
+}

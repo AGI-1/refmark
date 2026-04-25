@@ -1,0 +1,286 @@
+{
+    "config":  {
+                   "anchors":  100,
+                   "seed":  13,
+                   "epochs":  35,
+                   "backend":  "torchcpu",
+                   "embedding_dim":  24,
+                   "hidden_dim":  48,
+                   "mlp_hidden_dim":  768,
+                   "mlp_hidden2_dim":  0,
+                   "mlp_dropout":  0.1,
+                   "hybrid_exact_weight":  0.7,
+                   "soft_cover_reward":  0.92,
+                   "soft_overlap_base":  0.35,
+                   "soft_overlap_f1_weight":  0.45,
+                   "soft_overlap_precision_weight":  0.2,
+                   "soft_cover_breadth_penalty":  8.0,
+                   "soft_overlap_breadth_penalty":  10.0,
+                   "soft_cover_penalty_cap":  0.35,
+                   "soft_overlap_penalty_cap":  0.25,
+                   "soft_local_reward":  0.08,
+                   "soft_local_distance":  40,
+                   "range_exact_weight":  0.8,
+                   "range_neighbor_sigma":  1.5,
+                   "range_breadth_penalty":  0.15,
+                   "range_soft_weight":  0.2,
+                   "range_width_weight":  0.1,
+                   "center_exact_weight":  0.75,
+                   "center_soft_weight":  0.1,
+                   "center_width_weight":  0.25,
+                   "bm25_weight":  0.5,
+                   "bm25_top_k":  5,
+                   "bm25_margin":  1,
+                   "bm25_outside_penalty":  0.8,
+                   "bm25_enrich_train":  true,
+                   "broad_rerank_alpha":  1.0,
+                   "broad_rerank_beta":  0.8,
+                   "broad_rerank_gamma":  0.8,
+                   "broad_rerank_delta":  0.08,
+                   "learned_rerank_l2":  0.001,
+                   "learned_rerank_center_top_k":  5,
+                   "learned_rerank_width_top_k":  5,
+                   "learned_rerank_hidden_dim":  64,
+                   "learned_rerank_epochs":  180,
+                   "learned_rerank_dropout":  0.1,
+                   "local_cross_hidden_dim":  128,
+                   "local_cross_epochs":  120,
+                   "local_cross_dropout":  0.1,
+                   "local_cross_margin_threshold":  0.35,
+                   "local_cross_blend_steps":  5,
+                   "local_cross_max_candidates":  24,
+                   "route_bucket_size":  0,
+                   "route_top_k":  1,
+                   "route_margin":  0,
+                   "route_outside_penalty":  1.2,
+                   "count_aux_weight":  0.1,
+                   "count_label_cap":  8,
+                   "pairwise_rerank_margin":  0.2,
+                   "fusion_anchor_weight":  0.6,
+                   "fusion_range_weight":  1.0,
+                   "fusion_breadth_penalty":  0.08,
+                   "learning_rate":  0.25,
+                   "batch_size":  32,
+                   "weight_decay":  0.0001
+               },
+    "ensemble":  {
+                     "seeds":  [
+                                   13,
+                                   21
+                               ],
+                     "model_kind":  "center_width"
+                 },
+    "dataset":  {
+                    "anchor_count":  955,
+                    "train_examples":  3820,
+                    "valid_examples":  3820,
+                    "reformulated_examples":  7640,
+                    "vocab_size":  3926,
+                    "backend":  "torchcpu",
+                    "data_dir":  "../data/documentation_full_paragraph_contextual_idf_lean2"
+                },
+    "center_width_model":  {
+                               "width_bins":  [
+                                                  1,
+                                                  2,
+                                                  3,
+                                                  4,
+                                                  5,
+                                                  6,
+                                                  7,
+                                                  8,
+                                                  16,
+                                                  32,
+                                                  64,
+                                                  128,
+                                                  256,
+                                                  512,
+                                                  955
+                                              ],
+                               "route":  null,
+                               "train":  {
+                                             "exact_range_hit":  0.9638743455497382,
+                                             "exact_range_match":  0.9638743455497382,
+                                             "answer_overlap_rate":  0.9638743455497382,
+                                             "answer_cover_rate":  0.9638743455497382,
+                                             "breadth_ratio":  18.514193025114718,
+                                             "anchor_region_overlap_rate":  0.9638743455497382,
+                                             "anchor_region_cover_rate":  0.9638743455497382,
+                                             "anchor_region_iou":  0.9638743455497382,
+                                             "anchor_region_breadth_ratio":  1.002763887803709,
+                                             "predicted_anchor_count":  1.0,
+                                             "center_top3_accuracy":  0.9984293193717277,
+                                             "width_top3_accuracy":  1.0,
+                                             "relaxed_density":  {
+                                                                     "2x":  {
+                                                                                "overlap_hit":  0.9664921465968587,
+                                                                                "center_hit":  0.9664921465968587,
+                                                                                "cover_hit":  0.0010471204188481676
+                                                                            },
+                                                                     "3x":  {
+                                                                                "overlap_hit":  0.9704188481675393,
+                                                                                "center_hit":  0.9704188481675393,
+                                                                                "cover_hit":  0.0
+                                                                            },
+                                                                     "4x":  {
+                                                                                "overlap_hit":  0.9709424083769633,
+                                                                                "center_hit":  0.9709424083769633,
+                                                                                "cover_hit":  0.0
+                                                                            },
+                                                                     "5x":  {
+                                                                                "overlap_hit":  0.9722513089005236,
+                                                                                "center_hit":  0.9722513089005236,
+                                                                                "cover_hit":  0.0
+                                                                            }
+                                                                 }
+                                         },
+                               "valid":  {
+                                             "exact_range_hit":  0.8445026178010471,
+                                             "exact_range_match":  0.8445026178010471,
+                                             "answer_overlap_rate":  0.8445026178010471,
+                                             "answer_cover_rate":  0.8445026178010471,
+                                             "breadth_ratio":  18.71356670844126,
+                                             "anchor_region_overlap_rate":  0.8445026178010471,
+                                             "anchor_region_cover_rate":  0.8445026178010471,
+                                             "anchor_region_iou":  0.8445026178010471,
+                                             "anchor_region_breadth_ratio":  1.0268410284636285,
+                                             "predicted_anchor_count":  1.0,
+                                             "center_top3_accuracy":  0.9649214659685864,
+                                             "width_top3_accuracy":  1.0,
+                                             "relaxed_density":  {
+                                                                     "2x":  {
+                                                                                "overlap_hit":  0.8515706806282722,
+                                                                                "center_hit":  0.8515706806282722,
+                                                                                "cover_hit":  0.0010471204188481676
+                                                                            },
+                                                                     "3x":  {
+                                                                                "overlap_hit":  0.8607329842931937,
+                                                                                "center_hit":  0.8607329842931937,
+                                                                                "cover_hit":  0.0
+                                                                            },
+                                                                     "4x":  {
+                                                                                "overlap_hit":  0.8646596858638743,
+                                                                                "center_hit":  0.8646596858638743,
+                                                                                "cover_hit":  0.0
+                                                                            },
+                                                                     "5x":  {
+                                                                                "overlap_hit":  0.8712041884816754,
+                                                                                "center_hit":  0.8712041884816754,
+                                                                                "cover_hit":  0.0
+                                                                            }
+                                                                 }
+                                         },
+                               "valid_by_style":  {
+                                                      "generated_valid":  {
+                                                                              "exact_range_hit":  0.8445026178010471,
+                                                                              "exact_range_match":  0.8445026178010471,
+                                                                              "answer_overlap_rate":  0.8445026178010471,
+                                                                              "answer_cover_rate":  0.8445026178010471,
+                                                                              "breadth_ratio":  18.71356670844126,
+                                                                              "anchor_region_overlap_rate":  0.8445026178010471,
+                                                                              "anchor_region_cover_rate":  0.8445026178010471,
+                                                                              "anchor_region_iou":  0.8445026178010471,
+                                                                              "anchor_region_breadth_ratio":  1.0268410284636285,
+                                                                              "predicted_anchor_count":  1.0,
+                                                                              "center_top3_accuracy":  0.9649214659685864,
+                                                                              "width_top3_accuracy":  1.0,
+                                                                              "relaxed_density":  {
+                                                                                                      "2x":  {
+                                                                                                                 "overlap_hit":  0.8515706806282722,
+                                                                                                                 "center_hit":  0.8515706806282722,
+                                                                                                                 "cover_hit":  0.0010471204188481676
+                                                                                                             },
+                                                                                                      "3x":  {
+                                                                                                                 "overlap_hit":  0.8607329842931937,
+                                                                                                                 "center_hit":  0.8607329842931937,
+                                                                                                                 "cover_hit":  0.0
+                                                                                                             },
+                                                                                                      "4x":  {
+                                                                                                                 "overlap_hit":  0.8646596858638743,
+                                                                                                                 "center_hit":  0.8646596858638743,
+                                                                                                                 "cover_hit":  0.0
+                                                                                                             },
+                                                                                                      "5x":  {
+                                                                                                                 "overlap_hit":  0.8712041884816754,
+                                                                                                                 "center_hit":  0.8712041884816754,
+                                                                                                                 "cover_hit":  0.0
+                                                                                                             }
+                                                                                                  }
+                                                                          }
+                                                  },
+                               "reformulated":  {
+                                                    "exact_range_hit":  0.800130890052356,
+                                                    "exact_range_match":  0.800130890052356,
+                                                    "answer_overlap_rate":  0.800130890052356,
+                                                    "answer_cover_rate":  0.800130890052356,
+                                                    "breadth_ratio":  19.371473912681072,
+                                                    "anchor_region_overlap_rate":  0.800130890052356,
+                                                    "anchor_region_cover_rate":  0.800130890052356,
+                                                    "anchor_region_iou":  0.800130890052356,
+                                                    "anchor_region_breadth_ratio":  1.0773835363297262,
+                                                    "predicted_anchor_count":  1.0,
+                                                    "center_top3_accuracy":  0.9356020942408377,
+                                                    "width_top3_accuracy":  1.0,
+                                                    "relaxed_density":  {
+                                                                            "2x":  {
+                                                                                       "overlap_hit":  0.8094240837696335,
+                                                                                       "center_hit":  0.8094240837696335,
+                                                                                       "cover_hit":  0.0009162303664921466
+                                                                                   },
+                                                                            "3x":  {
+                                                                                       "overlap_hit":  0.8198952879581152,
+                                                                                       "center_hit":  0.8198952879581152,
+                                                                                       "cover_hit":  0.0
+                                                                                   },
+                                                                            "4x":  {
+                                                                                       "overlap_hit":  0.8255235602094241,
+                                                                                       "center_hit":  0.8255235602094241,
+                                                                                       "cover_hit":  0.0
+                                                                                   },
+                                                                            "5x":  {
+                                                                                       "overlap_hit":  0.8299738219895288,
+                                                                                       "center_hit":  0.8299738219895288,
+                                                                                       "cover_hit":  0.0
+                                                                                   }
+                                                                        }
+                                                },
+                               "reformulated_by_style":  {
+                                                             "generated_reformulation":  {
+                                                                                             "exact_range_hit":  0.800130890052356,
+                                                                                             "exact_range_match":  0.800130890052356,
+                                                                                             "answer_overlap_rate":  0.800130890052356,
+                                                                                             "answer_cover_rate":  0.800130890052356,
+                                                                                             "breadth_ratio":  19.371473912681072,
+                                                                                             "anchor_region_overlap_rate":  0.800130890052356,
+                                                                                             "anchor_region_cover_rate":  0.800130890052356,
+                                                                                             "anchor_region_iou":  0.800130890052356,
+                                                                                             "anchor_region_breadth_ratio":  1.0773835363297262,
+                                                                                             "predicted_anchor_count":  1.0,
+                                                                                             "center_top3_accuracy":  0.9356020942408377,
+                                                                                             "width_top3_accuracy":  1.0,
+                                                                                             "relaxed_density":  {
+                                                                                                                     "2x":  {
+                                                                                                                                "overlap_hit":  0.8094240837696335,
+                                                                                                                                "center_hit":  0.8094240837696335,
+                                                                                                                                "cover_hit":  0.0009162303664921466
+                                                                                                                            },
+                                                                                                                     "3x":  {
+                                                                                                                                "overlap_hit":  0.8198952879581152,
+                                                                                                                                "center_hit":  0.8198952879581152,
+                                                                                                                                "cover_hit":  0.0
+                                                                                                                            },
+                                                                                                                     "4x":  {
+                                                                                                                                "overlap_hit":  0.8255235602094241,
+                                                                                                                                "center_hit":  0.8255235602094241,
+                                                                                                                                "cover_hit":  0.0
+                                                                                                                            },
+                                                                                                                     "5x":  {
+                                                                                                                                "overlap_hit":  0.8299738219895288,
+                                                                                                                                "center_hit":  0.8299738219895288,
+                                                                                                                                "cover_hit":  0.0
+                                                                                                                            }
+                                                                                                                 }
+                                                                                         }
+                                                         }
+                           }
+}

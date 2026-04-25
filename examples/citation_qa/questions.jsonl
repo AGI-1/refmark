@@ -1,0 +1,3 @@
+{"id": "q1", "question": "Which ref explains how customer names are normalized?", "gold_refs": ["F02"]}
+{"id": "q2", "question": "Which ref should support the invoice total calculation?", "gold_refs": ["F03"]}
+{"id": "q3", "question": "Which ref states the enterprise refund window?", "gold_refs": ["F04"]}

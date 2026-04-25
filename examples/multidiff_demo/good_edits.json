@@ -1,0 +1,34 @@
+{
+  "edits": [
+    {
+      "region_id": "F01",
+      "action": "patch_within",
+      "patch_format": "line_edits",
+      "patch": {
+        "edits": [
+          {
+            "start_line": 2,
+            "end_line": 2,
+            "expected_text": "    return name.strip()\n",
+            "new_content": "    return \" \".join(name.strip().title().split())\n"
+          }
+        ]
+      }
+    },
+    {
+      "region_id": "F02",
+      "action": "patch_within",
+      "patch_format": "line_edits",
+      "patch": {
+        "edits": [
+          {
+            "start_line": 3,
+            "end_line": 3,
+            "expected_text": "    return f\"Hello, {clean}\"\n",
+            "new_content": "    return f\"Hello, {clean}!\"\n"
+          }
+        ]
+      }
+    }
+  ]
+}

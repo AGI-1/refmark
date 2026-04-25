@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refmark"
+version = "0.1.0"
+description = "Marker-grounded primitives for deterministic citation and multi-region editing workflows"
+requires-python = ">=3.10"
+readme = "README.md"
+license = {file = "LICENSE"}
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.27.0", "pydantic>=2.0"]
+typescript = ["tree-sitter>=0.25.0", "tree-sitter-typescript>=0.23.2"]
+train = ["numpy>=1.26", "requests>=2.31", "torch>=2.2"]
+train-fetch = ["beautifulsoup4>=4.12", "pypdf>=4.2"]
+directml = ["torch-directml"]
+dev = ["pytest>=8.0", "numpy>=1.26", "requests>=2.31"]
+
+[project.scripts]
+refmark = "refmark.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["refmark*"]
+
+[tool.setuptools.package-data]
+refmark_train = [
+    "README.md",
+    "RESULTS.md",
+    "PIPELINES.md",
+    "PUBLISH_REVIEW.md",
+    "SOURCE_PROVENANCE.md",
+    "LICENSE",
+    "pyproject.toml",
+    "requirements*.txt",
+    "data/**/*.json",
+    "data/**/*.jsonl",
+    "runs/**/*.json",
+    "source_docs/**/*.json",
+]

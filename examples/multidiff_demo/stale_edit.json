@@ -1,0 +1,19 @@
+{
+  "edits": [
+    {
+      "region_id": "F01",
+      "action": "patch_within",
+      "patch_format": "line_edits",
+      "patch": {
+        "edits": [
+          {
+            "start_line": 2,
+            "end_line": 2,
+            "expected_text": "    return name.strip()\n",
+            "new_content": "    return name.lower()\n"
+          }
+        ]
+      }
+    }
+  ]
+}

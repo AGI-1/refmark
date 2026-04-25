@@ -1,0 +1,41 @@
+{
+  "name": "refmark-apply-ref-diff",
+  "version": "0.1.0",
+  "description": "Expose the refmark apply_ref_diff primitive through MCP for stable same-file multi-edit workflows.",
+  "author": {
+    "name": "Boris Imenitov",
+    "url": "https://github.com/b-imenitov"
+  },
+  "homepage": "https://github.com/b-imenitov",
+  "repository": "https://github.com/b-imenitov/refmark",
+  "license": "MIT",
+  "keywords": [
+    "refmark",
+    "mcp",
+    "multidiff",
+    "code-editing",
+    "python",
+    "typescript"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Refmark Apply Ref Diff",
+    "shortDescription": "Apply region-scoped refmark edits through MCP",
+    "longDescription": "Bring the refmark apply_ref_diff primitive into Codex through MCP so agents can target stable semantic regions or explicit ref ranges when making multiple same-file edits.",
+    "developerName": "OpenAI",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://openai.com/",
+    "privacyPolicyURL": "https://openai.com/policies/privacy-policy/",
+    "termsOfServiceURL": "https://openai.com/policies/terms-of-use/",
+    "defaultPrompt": [
+      "Use apply_ref_diff to update several Python or TypeScript regions in one pass"
+    ],
+    "brandColor": "#1F6FEB",
+    "screenshots": []
+  }
+}

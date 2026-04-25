@@ -1,0 +1,50 @@
+[
+    {
+        "category":  "corporate",
+        "text_path":  "corporate_set.txt",
+        "documents":  [
+                          "corporate_apple_10k_2024",
+                          "corporate_microsoft_10k_2024"
+                      ],
+        "words":  87458,
+        "meets_50k_words":  true
+    },
+    {
+        "category":  "documentation",
+        "text_path":  "documentation_set.txt",
+        "documents":  [
+                          "documentation_python_sqlite3",
+                          "documentation_python_pathlib",
+                          "documentation_python_argparse",
+                          "documentation_python_asyncio_task",
+                          "documentation_python_subprocess"
+                      ],
+        "words":  52679,
+        "meets_50k_words":  true
+    },
+    {
+        "category":  "medical",
+        "text_path":  "medical_set.txt",
+        "documents":  [
+                          "medical_fda_m14_2026",
+                          "medical_fda_rwe_drugs_2025",
+                          "medical_fda_pdufa_rwe_2023",
+                          "medical_fda_ectd_76466",
+                          "medical_fda_e6_r3_gcp",
+                          "medical_fda_rwe_devices_2025"
+                      ],
+        "words":  77262,
+        "meets_50k_words":  true
+    },
+    {
+        "category":  "legal",
+        "text_path":  "legal_set.txt",
+        "documents":  [
+                          "legal_osha_bloodborne_pathogens",
+                          "legal_osha_hazard_communication_standard",
+                          "legal_osha_hazard_communication_final_rule_2024"
+                      ],
+        "words":  202918,
+        "meets_50k_words":  true
+    }
+]
