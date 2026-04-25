@@ -8,8 +8,7 @@ line numbers.
 This does not guarantee that a model cites the right region. It guarantees a
 different and useful thing: cited regions exist, resolve back to source text,
 and can be audited. For review workflows, an irrelevant citation and a
-fabricated citation are not the same failure. One is inspectable; the other is
-not.
+fabricated citation are not the same failure. Inspecting for irrelevance is simple.
 
 Once a corpus has addresses, citation behavior becomes structured data:
 exact hits, overlap, overcitation, undercitation, wrong-region hits, and
