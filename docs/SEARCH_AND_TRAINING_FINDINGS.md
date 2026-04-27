@@ -437,6 +437,7 @@ Results:
 | text -> gold article-vector distill | Gemma 200k | 0.1661 | 0.3653 | 38.2 MB artifact, ~1.42 ms/query |
 | text -> gold article-vector distill | 3-cycle combined | 0.2816 | 0.5207 | 38.2 MB artifact, ~1.45 ms/query |
 | text -> Qwen3 query-embedding distill | 3-cycle combined | 0.2771 | 0.5270 | 38.2 MB artifact, ~1.45 ms/query |
+| larger text -> Qwen3 query-embedding distill | 3-cycle combined | 0.3196 | 0.5552 | 58.2 MB artifact, 9.21M params, 80 epochs, ~1.80 ms/query |
 | cached Qwen3 query embedding -> article classifier | 3-cycle combined | 0.9377 | 0.9819 | 20.4 MB artifact, ~0.63 ms/query after embedding |
 | BM25 article baseline | Gemma 200k | 0.3712 | 0.5714 | static lexical |
 | BM25 article baseline | 3-cycle combined | 0.5974 | 0.7491 | static lexical, same split as embedding-classifier run |
@@ -445,7 +446,15 @@ This is a useful negative result. Distillation is not magic yet. More generated
 supervision clearly helps (`0.1661 -> 0.2816` hit@10), and vector targets are
 far better than an opaque article-label classifier, but the tiny bag/MLP query
 encoder does not approximate Qwen3 embedding quality. Training against cached
-Qwen3 query embeddings also did not beat training against gold article vectors.
+Qwen3 query embeddings also did not beat training against gold article vectors
+until scaled up; even then the larger 9.21M parameter CPU run only reached
+`0.3196` hit@10, still below static BM25 at `0.5974`.
+
+The larger CPU run is useful for sizing expectations. It trained on the same
+5,988/5,810 split for 80 epochs in about `1,042s` on the mini PC. Quality
+plateaued around epochs 66-80, so simply waiting longer is unlikely to produce
+a jump. The next local-student improvement needs architecture or signal change,
+not just more epochs.
 
 The cached query-embedding classifier changes the picture, but also changes the
 runtime assumptions. It does not replace embeddings; it adds a small supervised

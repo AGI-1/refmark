@@ -772,9 +772,30 @@ Variants:
 | text -> gold article-vector distill | Gemma 200k | 0.1661 | 0.3653 | 38.2 MB artifact, ~1.42 ms/query |
 | text -> gold article-vector distill | 3-cycle combined | 0.2816 | 0.5207 | 38.2 MB artifact, ~1.45 ms/query |
 | text -> Qwen3 query-embedding distill | 3-cycle combined | 0.2771 | 0.5270 | 38.2 MB artifact, ~1.45 ms/query |
+| larger text -> Qwen3 query-embedding distill | 3-cycle combined | 0.3196 | 0.5552 | 58.2 MB artifact, 9.21M params, 80 epochs, ~1.80 ms/query |
 | cached Qwen3 query embedding -> article classifier | 3-cycle combined | 0.9377 | 0.9819 | 20.4 MB artifact, ~0.63 ms/query after embedding |
 | BM25 article baseline | Gemma 200k | 0.3712 | 0.5714 | static lexical |
 | BM25 article baseline | 3-cycle combined | 0.5974 | 0.7491 | static lexical, same split as embedding-classifier run |
+
+Larger CPU distilled query-encoder details:
+
+- Target: cached Qwen3 query-embedding space.
+- Parameters: `9.21M`.
+- Artifact: `58.2 MB`.
+- Train questions: `5,988`.
+- Eval questions: `5,810`.
+- Epochs: `80`.
+- Training time on the mini PC: about `1,042s`.
+- Best epoch: `78`.
+- hit@1: `0.0993`.
+- hit@10: `0.3196`.
+- hit@50: `0.5552`.
+- MRR: `0.1701`.
+
+This slightly improves the prior text-only distillation result but remains below
+static BM25 on the same split. The failure is informative: current generated
+questions plus a small randomly initialized word-token encoder do not recreate
+the semantic generalization supplied by Qwen3 embeddings.
 
 Cached embedding classifier details:
 
