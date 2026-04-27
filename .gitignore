@@ -6,7 +6,17 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+node_modules/
 
 examples/*/output/
+examples/*/output_*/
 bench_results/
 .refmark/
+
+# Local corpus fetches and generated training datasets.
+refmark_train/source_docs/raw/
+refmark_train/source_docs/text/
+refmark_train/source_docs/sets/*.txt
+refmark_train/data/*_generated/
+refmark_train/data/*_full/
+refmark_train/data/*_combined/

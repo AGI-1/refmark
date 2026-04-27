@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "refmark"
 version = "0.1.0"
-description = "Marker-grounded primitives for deterministic citation and multi-region editing workflows"
+description = "Stable evidence regions for RAG evaluation, citation review, and bounded edits"
 requires-python = ">=3.10"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -31,6 +31,9 @@ pythonpath = ["."]
 include = ["refmark*"]
 
 [tool.setuptools.package-data]
+refmark = [
+    "browser_search.js",
+]
 refmark_train = [
     "README.md",
     "RESULTS.md",

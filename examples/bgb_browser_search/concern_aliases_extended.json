@@ -1,0 +1,794 @@
+[
+  {
+    "id": "broken_phone_purchase",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_434", "bgb:S_437", "bgb:S_439", "bgb:S_474", "bgb:S_475b"],
+    "queries": [
+      "Ich habe ein neues Handy gekauft und es geht nach zwei Tagen nicht mehr an. Welche Rechte habe ich?",
+      "Der Verkäufer will mein kaputtes Smartphone nicht reparieren. Was kann ich verlangen?",
+      "I bought a phone and it stopped working immediately. Can I get repair or replacement?"
+    ],
+    "aliases": [
+      "kaputtes Handy",
+      "defektes Smartphone",
+      "gekauftes Telefon funktioniert nicht",
+      "broken cellphone after purchase",
+      "defective phone warranty repair replacement refund",
+      "Gewaehrleistung bei defekter Ware",
+      "Nacherfuellung Ersatzlieferung Reparatur Ruecktritt Minderung"
+    ],
+    "note": "Consumer-goods defect concern."
+  },
+  {
+    "id": "wrong_item_delivered",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_434", "bgb:S_437", "bgb:S_439"],
+    "queries": [
+      "Ich habe etwas anderes geliefert bekommen als bestellt. Ist das ein Mangel?",
+      "The shop sent a different item than the one I ordered. What rules apply?"
+    ],
+    "aliases": [
+      "falsche Ware geliefert",
+      "andere Sache geliefert",
+      "wrong item delivered",
+      "delivery does not match order",
+      "Sachmangel falsche Lieferung"
+    ],
+    "note": "Wrong-item sales defect."
+  },
+  {
+    "id": "seller_repair_costs",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_439"],
+    "queries": [
+      "Muss ich Versand und Arbeitskosten zahlen, wenn der Verkäufer nachbessert?",
+      "Who pays transport and labor costs for repair of a defective item?"
+    ],
+    "aliases": [
+      "Kosten der Nacherfuellung",
+      "Transportkosten Reparatur defekte Ware",
+      "seller pays repair transport labor material costs",
+      "Aufwendungen Nacherfuellung"
+    ],
+    "note": "Cost allocation for supplementary performance."
+  },
+  {
+    "id": "warranty_period_goods",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_438"],
+    "queries": [
+      "Wie lange kann ich Mängel an einer gekauften Sache geltend machen?",
+      "What limitation period applies to defects in purchased goods?"
+    ],
+    "aliases": [
+      "Verjaehrung Kauf Maengel",
+      "Frist Gewaehrleistung Kaufvertrag",
+      "limitation period purchase defects",
+      "buyer defect claim deadline"
+    ],
+    "note": "Limitation period for sales defects."
+  },
+  {
+    "id": "rent_mold_reduction",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_536", "bgb:S_536a", "bgb:S_536c"],
+    "queries": [
+      "In meiner Wohnung ist Schimmel. Darf ich die Miete mindern?",
+      "My rented flat has mold. Can I pay less rent?"
+    ],
+    "aliases": [
+      "Schimmel Wohnung Mietminderung",
+      "Mangel in Mietwohnung",
+      "rented apartment mold reduce rent",
+      "less rent because apartment has defects",
+      "Mieter muss Mangel anzeigen"
+    ],
+    "note": "Rental defect and rent reduction."
+  },
+  {
+    "id": "rent_defect_damages",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_536a"],
+    "queries": [
+      "Kann ich vom Vermieter Schadensersatz verlangen, wenn er einen Mangel nicht beseitigt?",
+      "Can a tenant claim damages if the landlord does not fix a defect?"
+    ],
+    "aliases": [
+      "Schadensersatz Mieter Mangel",
+      "Vermieter beseitigt Mangel nicht",
+      "tenant damages landlord defect",
+      "Aufwendungsersatz Mietmangel"
+    ],
+    "note": "Tenant damages for defects."
+  },
+  {
+    "id": "tenant_notice_defect",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_536c"],
+    "queries": [
+      "Muss ich dem Vermieter einen Wasserschaden sofort melden?",
+      "Do I have to notify the landlord immediately about a defect?"
+    ],
+    "aliases": [
+      "Mangel unverzueglich anzeigen",
+      "Wasserschaden Vermieter melden",
+      "tenant must notify landlord defect",
+      "Anzeige Pflicht Mietmangel"
+    ],
+    "note": "Notice duty for rental defects."
+  },
+  {
+    "id": "apartment_notice_period",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_573c"],
+    "queries": [
+      "Welche Kündigungsfrist gilt, wenn ich meine Wohnung kündigen will?",
+      "How much notice is required to terminate an apartment lease?"
+    ],
+    "aliases": [
+      "Kuendigungsfrist Wohnung",
+      "Mietwohnung kuendigen drei Monate",
+      "apartment lease notice period",
+      "residential tenancy termination deadline"
+    ],
+    "note": "Residential lease notice period."
+  },
+  {
+    "id": "landlord_modernization_rent_increase",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_559"],
+    "queries": [
+      "Darf der Vermieter nach einer Modernisierung die Miete erhöhen?",
+      "Can rent be increased after modernization work?"
+    ],
+    "aliases": [
+      "Mieterhoehung Modernisierung",
+      "Vermieter modernisiert Wohnung mehr Miete",
+      "rent increase after modernization",
+      "modernisation rent increase"
+    ],
+    "note": "Rent increase after modernization."
+  },
+  {
+    "id": "employment_notice_period",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_622"],
+    "queries": [
+      "Wie lange ist die Kündigungsfrist in meinem Arbeitsverhältnis?",
+      "What notice period applies when an employee quits a job?"
+    ],
+    "aliases": [
+      "Kuendigungsfrist Arbeitsvertrag",
+      "Arbeitnehmer kuendigen Frist",
+      "employment notice period employee employer",
+      "Arbeitsverhaeltnis beenden Frist"
+    ],
+    "note": "Employment notice period."
+  },
+  {
+    "id": "minor_online_purchase",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_106", "bgb:S_107", "bgb:S_108", "bgb:S_110"],
+    "queries": [
+      "Mein Kind hat online etwas gekauft. Ist der Vertrag ohne meine Zustimmung wirksam?",
+      "Can a child buy something online without parental approval?"
+    ],
+    "aliases": [
+      "Kind online gekauft Vertrag Eltern",
+      "Minderjaehrige Zustimmung Vertrag Taschengeld",
+      "minor online purchase parents approval",
+      "child contract without consent",
+      "beschraenkte Geschaeftsfaehigkeit"
+    ],
+    "note": "Minor contract capacity."
+  },
+  {
+    "id": "minor_pocket_money",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_110"],
+    "queries": [
+      "Ist ein Kauf wirksam, wenn ein Minderjähriger ihn mit Taschengeld bezahlt?",
+      "When does the pocket money rule make a minor's contract valid?"
+    ],
+    "aliases": [
+      "Taschengeldparagraph",
+      "Minderjaehriger zahlt mit eigenen Mitteln",
+      "pocket money rule minor contract",
+      "section 110 minor pays own funds"
+    ],
+    "note": "Pocket money rule."
+  },
+  {
+    "id": "void_joke_statement",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_118"],
+    "queries": [
+      "Ist eine Erklärung gültig, wenn sie erkennbar nicht ernst gemeint war?",
+      "What happens if someone makes a declaration as a joke?"
+    ],
+    "aliases": [
+      "Scherzerklaerung nicht ernst",
+      "Willenserklaerung nicht ernstlich",
+      "joke declaration not serious",
+      "lack of seriousness"
+    ],
+    "note": "Non-serious declaration."
+  },
+  {
+    "id": "mistake_contract",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_119", "bgb:S_121"],
+    "queries": [
+      "Kann ich eine Erklärung anfechten, wenn ich mich geirrt habe?",
+      "How quickly must I challenge a contract declaration made by mistake?"
+    ],
+    "aliases": [
+      "Irrtum Vertrag anfechten",
+      "Anfechtung unverzueglich Irrtum",
+      "mistake declaration rescind challenge",
+      "error in contract declaration"
+    ],
+    "note": "Mistake and challenge timing."
+  },
+  {
+    "id": "online_order_withdrawal",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_312g", "bgb:S_355", "bgb:S_356"],
+    "queries": [
+      "Ich habe im Internet bestellt. Wie lange kann ich widerrufen?",
+      "How long can I withdraw from an online purchase?"
+    ],
+    "aliases": [
+      "Online Bestellung widerrufen Frist",
+      "Internetkauf Rueckgabe Widerrufsrecht",
+      "cancel online order return period",
+      "distance contract withdrawal deadline",
+      "14 Tage Widerruf"
+    ],
+    "note": "Consumer withdrawal for distance contracts."
+  },
+  {
+    "id": "withdrawal_exceptions",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_312g"],
+    "queries": [
+      "Gibt es Online-Bestellungen, bei denen ich kein Widerrufsrecht habe?",
+      "Which distance contracts are excluded from withdrawal rights?"
+    ],
+    "aliases": [
+      "Ausnahmen Widerrufsrecht",
+      "kein Widerruf Onlinekauf",
+      "withdrawal right exceptions",
+      "excluded distance contracts"
+    ],
+    "note": "Exceptions to withdrawal."
+  },
+  {
+    "id": "online_withdrawal_button",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_356"],
+    "queries": [
+      "Muss ein Unternehmer einen Online-Button für den Widerruf anbieten?",
+      "Does a business have to provide an online withdrawal function?"
+    ],
+    "aliases": [
+      "Widerruf online erklaeren Button",
+      "Online Widerruf Bestaetigung",
+      "online withdrawal function confirmation",
+      "consumer can withdraw electronically"
+    ],
+    "note": "Electronic withdrawal declaration."
+  },
+  {
+    "id": "digital_product_not_provided",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_327c"],
+    "queries": [
+      "Was kann ich tun, wenn der Anbieter den digitalen Inhalt nicht bereitstellt?",
+      "What if a digital service is not provided after purchase?"
+    ],
+    "aliases": [
+      "digitales Produkt nicht bereitgestellt",
+      "App Download nicht geliefert",
+      "digital content not supplied",
+      "consumer digital service unavailable"
+    ],
+    "note": "Failure to provide digital product."
+  },
+  {
+    "id": "digital_product_updates",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_327f", "bgb:S_327i", "bgb:S_475b"],
+    "queries": [
+      "Muss der Verkäufer Updates für digitale Produkte bereitstellen?",
+      "Does the seller have to provide updates for goods with digital elements?"
+    ],
+    "aliases": [
+      "Updates digitale Produkte",
+      "Aktualisierungspflicht Ware digitale Elemente",
+      "digital product update obligation",
+      "goods with digital elements updates"
+    ],
+    "note": "Update obligations."
+  },
+  {
+    "id": "digital_product_defect_rights",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_327i", "bgb:S_327m"],
+    "queries": [
+      "Welche Rechte habe ich, wenn eine gekaufte App mangelhaft ist?",
+      "What remedies apply if digital content is defective?"
+    ],
+    "aliases": [
+      "mangelhafte App Rechte Verbraucher",
+      "digitaler Inhalt Mangel Abhilfe Minderung",
+      "defective digital content remedies",
+      "consumer rights digital product defect"
+    ],
+    "note": "Digital product remedies."
+  },
+  {
+    "id": "payment_unauthorized",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_675u", "bgb:S_676b"],
+    "queries": [
+      "Von meinem Konto wurde ohne Erlaubnis Geld abgebucht. Was muss ich melden?",
+      "What should I do after an unauthorized payment transaction?"
+    ],
+    "aliases": [
+      "nicht autorisierte Zahlung melden",
+      "Konto Abbuchung ohne Erlaubnis",
+      "unauthorized payment transaction notify bank",
+      "payment service user report fraud"
+    ],
+    "note": "Unauthorized payment transaction."
+  },
+  {
+    "id": "payment_refund_liability",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_675u", "bgb:S_675v", "bgb:S_675y"],
+    "queries": [
+      "Bekomme ich mein Geld zurück, wenn eine Zahlung nicht autorisiert war?",
+      "Who is liable when a payment was unauthorized or executed incorrectly?"
+    ],
+    "aliases": [
+      "Erstattung nicht autorisierte Zahlung",
+      "Haftung Zahlungsdienstleister Fehler",
+      "refund unauthorized payment",
+      "incorrect payment execution liability"
+    ],
+    "note": "Payment refund and liability."
+  },
+  {
+    "id": "inheritance_refuse_debt",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1942", "bgb:S_1943", "bgb:S_1944"],
+    "queries": [
+      "Ich habe Schulden geerbt. Kann ich die Erbschaft ausschlagen?",
+      "Can I refuse an inheritance if the estate has debts?"
+    ],
+    "aliases": [
+      "Erbe Schulden ablehnen",
+      "Erbschaft ausschlagen Frist Nachlass",
+      "refuse inheritance debt deadline",
+      "disclaim inheritance because estate has debts"
+    ],
+    "note": "Inheritance disclaimer."
+  },
+  {
+    "id": "inheritance_disclaimer_deadline",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1944", "bgb:S_1945"],
+    "queries": [
+      "Welche Frist gilt für die Ausschlagung einer Erbschaft?",
+      "How must an inheritance disclaimer be declared?"
+    ],
+    "aliases": [
+      "Ausschlagungsfrist Erbschaft",
+      "Erbschaft ausschlagen Nachlassgericht",
+      "inheritance disclaimer deadline court declaration",
+      "six weeks reject inheritance"
+    ],
+    "note": "Deadline and form for inheritance disclaimer."
+  },
+  {
+    "id": "inheritance_challenge_acceptance",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1954", "bgb:S_1955"],
+    "queries": [
+      "Kann ich die Annahme einer Erbschaft später anfechten?",
+      "What is the deadline to challenge acceptance of an inheritance?"
+    ],
+    "aliases": [
+      "Annahme Erbschaft anfechten Frist",
+      "Ausschlagung Erbschaft Anfechtung",
+      "challenge acceptance inheritance deadline",
+      "contest inheritance disclaimer acceptance"
+    ],
+    "note": "Challenge acceptance or disclaimer."
+  },
+  {
+    "id": "will_ambiguous_person",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_2073", "bgb:S_2071"],
+    "queries": [
+      "Was passiert, wenn im Testament unklar ist, welche Person gemeint war?",
+      "What if a will description could refer to several people?"
+    ],
+    "aliases": [
+      "Testament Person unklar",
+      "mehrere Personen Beschreibung Erblasser",
+      "ambiguous person named in will",
+      "testator description multiple people"
+    ],
+    "note": "Ambiguous testamentary designation."
+  },
+  {
+    "id": "child_contact_right",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1684"],
+    "queries": [
+      "Darf ein Elternteil den Umgang mit dem Kind verhindern?",
+      "Does a child have a right to contact with both parents?"
+    ],
+    "aliases": [
+      "Umgangsrecht Kind Eltern",
+      "Kontakt Kind beide Elternteile",
+      "child contact right both parents",
+      "parent prevents visitation"
+    ],
+    "note": "Child contact rights."
+  },
+  {
+    "id": "adoption_adult",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1767", "bgb:S_1770"],
+    "queries": [
+      "Kann ein Volljähriger noch als Kind angenommen werden?",
+      "What family relationships remain after adoption of an adult?"
+    ],
+    "aliases": [
+      "Volljaehrigenadoption Voraussetzungen",
+      "Annahme Volljaehriger Verwandtschaft bleibt",
+      "adult adoption requirements",
+      "adult adoptee existing relatives"
+    ],
+    "note": "Adult adoption and effects."
+  },
+  {
+    "id": "emergency_damage_property",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_904"],
+    "queries": [
+      "Darf ich fremdes Eigentum beschädigen, um eine akute Gefahr abzuwenden?",
+      "Can someone interfere with property to avert immediate danger?"
+    ],
+    "aliases": [
+      "Notstand fremde Sache beschaedigen",
+      "Gefahr abwenden Eigentum Eingriff",
+      "interfere with property emergency danger",
+      "necessity damage another person's thing"
+    ],
+    "note": "Defensive necessity."
+  },
+  {
+    "id": "self_defense_possession",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_859", "bgb:S_858"],
+    "queries": [
+      "Darf ich mich sofort gegen verbotene Eigenmacht wehren?",
+      "What can a possessor do against unlawful interference?"
+    ],
+    "aliases": [
+      "verbotene Eigenmacht Besitzwehr",
+      "Besitzer darf Gewalt entgegensetzen",
+      "self help possessor unlawful interference",
+      "defend possession immediately"
+    ],
+    "note": "Possessory self-help."
+  },
+  {
+    "id": "mortgage_register_cancel",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1183"],
+    "queries": [
+      "Wie wird eine Hypothek im Grundbuch aufgehoben?",
+      "What is needed to cancel a mortgage in the land register?"
+    ],
+    "aliases": [
+      "Hypothek Grundbuch aufheben",
+      "Hypothek Verzicht Loeschung",
+      "cancel mortgage land register",
+      "waiver mortgage registration"
+    ],
+    "note": "Mortgage cancellation."
+  },
+  {
+    "id": "pledge_expires",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1252"],
+    "queries": [
+      "Wann erlischt ein Pfandrecht?",
+      "When does a pledge right expire?"
+    ],
+    "aliases": [
+      "Pfandrecht erlischt Forderung",
+      "Erloschen mit Forderung",
+      "pledge expires with claim",
+      "security right ends when debt ends"
+    ],
+    "note": "Pledge expires with claim."
+  },
+  {
+    "id": "partnership_exit",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_723", "bgb:S_728", "bgb:S_740c"],
+    "queries": [
+      "Was passiert mit meinen Rechten, wenn ich aus einer Gesellschaft ausscheide?",
+      "How can a partner leave a partnership and what happens after exit?"
+    ],
+    "aliases": [
+      "Gesellschafter ausscheiden Rechte",
+      "Kuendigung Gesellschaft Beteiligung",
+      "partner exits partnership rights",
+      "leaving civil law partnership"
+    ],
+    "note": "Partner leaving a partnership."
+  },
+  {
+    "id": "package_travel_defect",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_651a", "bgb:S_651i", "bgb:S_651m"],
+    "queries": [
+      "Meine Pauschalreise hatte Mängel. Welche Rechte habe ich?",
+      "What rights does a traveler have when a package tour has defects?"
+    ],
+    "aliases": [
+      "Pauschalreise Reisemangel",
+      "Reiseveranstalter Mangel Minderung",
+      "package tour defect traveler rights",
+      "travel organizer package holiday defect"
+    ],
+    "note": "Package travel defects."
+  },
+  {
+    "id": "loan_withdrawal",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_495", "bgb:S_355"],
+    "queries": [
+      "Kann ich einen Verbraucherdarlehensvertrag widerrufen?",
+      "Does a consumer loan agreement have a withdrawal right?"
+    ],
+    "aliases": [
+      "Verbraucherdarlehen Widerruf",
+      "Kreditvertrag Verbraucher widerrufen",
+      "consumer loan withdrawal right",
+      "credit agreement revoke"
+    ],
+    "note": "Consumer loan withdrawal."
+  },
+  {
+    "id": "gift_revocation",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_530", "bgb:S_531"],
+    "queries": [
+      "Kann ich eine Schenkung wegen groben Undanks widerrufen?",
+      "How must revocation of a gift be declared?"
+    ],
+    "aliases": [
+      "Schenkung widerrufen grober Undank",
+      "Widerruf Schenkung Erklaerung",
+      "revoke gift gross ingratitude",
+      "gift revocation declaration"
+    ],
+    "note": "Revocation of gift."
+  },
+  {
+    "id": "offer_binding",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_145", "bgb:S_146"],
+    "queries": [
+      "Bin ich an ein Vertragsangebot gebunden, nachdem ich es abgegeben habe?",
+      "When does an offer to contract expire?"
+    ],
+    "aliases": [
+      "Antrag Vertrag bindend",
+      "Vertragsangebot erlischt",
+      "binding offer contract",
+      "offer acceptance expiration"
+    ],
+    "note": "Binding offer and expiration."
+  },
+  {
+    "id": "good_faith_interpretation",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_157", "bgb:S_242"],
+    "queries": [
+      "Wie werden Verträge nach Treu und Glauben ausgelegt?",
+      "What does good faith mean for contractual performance?"
+    ],
+    "aliases": [
+      "Treu und Glauben Vertrag",
+      "Vertrag auslegen Verkehrssitte",
+      "good faith contract interpretation",
+      "performance according to good faith"
+    ],
+    "note": "Good faith interpretation/performance."
+  },
+  {
+    "id": "default_damages",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_280", "bgb:S_286"],
+    "queries": [
+      "Wann kann ich Schadensersatz verlangen, wenn die andere Seite nicht leistet?",
+      "What happens if a debtor is in default?"
+    ],
+    "aliases": [
+      "Schadensersatz Pflichtverletzung Verzug",
+      "Schuldner leistet nicht Mahnung",
+      "damages breach of duty default",
+      "debtor delay compensation"
+    ],
+    "note": "Damages and default."
+  },
+  {
+    "id": "standard_terms_invalid",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_305c", "bgb:S_307", "bgb:S_308", "bgb:S_309"],
+    "queries": [
+      "Wann sind Klauseln in AGB unwirksam?",
+      "Can surprising terms in standard business conditions be invalid?"
+    ],
+    "aliases": [
+      "AGB unwirksam ueberraschende Klausel",
+      "Allgemeine Geschaeftsbedingungen unangemessen",
+      "standard terms invalid unfair clause",
+      "surprising clause not part of contract"
+    ],
+    "note": "Standard terms control."
+  },
+  {
+    "id": "medical_treatment_consent",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_630d", "bgb:S_630e"],
+    "queries": [
+      "Muss ein Arzt mich vor einer Behandlung aufklären und meine Einwilligung einholen?",
+      "What information must be given before medical treatment consent?"
+    ],
+    "aliases": [
+      "Patient Einwilligung Aufklaerung Behandlung",
+      "Arzt muss informieren Behandlung",
+      "medical treatment consent information",
+      "patient informed consent"
+    ],
+    "note": "Medical consent and information duties."
+  },
+  {
+    "id": "service_contract_termination",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_626", "bgb:S_627"],
+    "queries": [
+      "Kann ich einen Dienstvertrag aus wichtigem Grund fristlos kündigen?",
+      "When can a service relationship be terminated for good cause?"
+    ],
+    "aliases": [
+      "Dienstvertrag fristlos kuendigen wichtiger Grund",
+      "Dienstverhaeltnis besondere Vertrauensstellung",
+      "service contract termination good cause",
+      "terminate services without notice"
+    ],
+    "note": "Service contract termination."
+  },
+  {
+    "id": "work_contract_defect",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_633", "bgb:S_634", "bgb:S_635"],
+    "queries": [
+      "Der Handwerker hat mangelhaft gearbeitet. Welche Rechte habe ich?",
+      "What remedies apply when contracted work is defective?"
+    ],
+    "aliases": [
+      "Werkvertrag Mangel Handwerker",
+      "Nacherfuellung Werk Minderung Ruecktritt",
+      "defective work contract remedies",
+      "contractor poor workmanship"
+    ],
+    "note": "Work contract defects."
+  },
+  {
+    "id": "construction_contract_installments",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_632a", "bgb:S_650m"],
+    "queries": [
+      "Darf ein Bauunternehmer Abschlagszahlungen verlangen?",
+      "What limits apply to installment payments in building contracts?"
+    ],
+    "aliases": [
+      "Abschlagszahlung Bauvertrag",
+      "Bauunternehmer Teilzahlung Sicherheit",
+      "building contract progress payments",
+      "installment payment construction contract"
+    ],
+    "note": "Progress payments in construction."
+  },
+  {
+    "id": "unjust_enrichment",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_812", "bgb:S_818"],
+    "queries": [
+      "Kann ich Geld zurückverlangen, das ohne Rechtsgrund gezahlt wurde?",
+      "What must someone return after unjust enrichment?"
+    ],
+    "aliases": [
+      "ohne Rechtsgrund gezahlt zurueck",
+      "ungerechtfertigte Bereicherung Herausgabe",
+      "unjust enrichment restitution",
+      "payment without legal ground"
+    ],
+    "note": "Unjust enrichment."
+  },
+  {
+    "id": "tort_damage",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_823", "bgb:S_826"],
+    "queries": [
+      "Wann haftet jemand, wenn er mein Eigentum beschädigt?",
+      "What civil liability applies for intentional immoral damage?"
+    ],
+    "aliases": [
+      "unerlaubte Handlung Eigentum beschaedigt",
+      "vorsatz sittenwidrig Schaden",
+      "tort liability property damage",
+      "intentional immoral damage"
+    ],
+    "note": "Tort liability."
+  },
+  {
+    "id": "association_meeting",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_32", "bgb:S_36", "bgb:S_37"],
+    "queries": [
+      "Wann muss ein Verein eine Mitgliederversammlung einberufen?",
+      "Can association members demand that a meeting be called?"
+    ],
+    "aliases": [
+      "Verein Mitgliederversammlung einberufen",
+      "Minderheit verlangt Versammlung",
+      "association member meeting convene",
+      "members demand meeting"
+    ],
+    "note": "Association meetings."
+  },
+  {
+    "id": "association_member_exit",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_39"],
+    "queries": [
+      "Kann ich aus einem Verein austreten und wie lang darf die Kündigungsfrist sein?",
+      "What limits apply to notice periods for leaving an association?"
+    ],
+    "aliases": [
+      "Austritt Verein Kuendigungsfrist",
+      "Mitglied Verein verlassen",
+      "leave association notice period",
+      "club membership resignation"
+    ],
+    "note": "Leaving an association."
+  },
+  {
+    "id": "lost_property_found",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_965", "bgb:S_966", "bgb:S_973"],
+    "queries": [
+      "Ich habe eine fremde Sache gefunden. Was muss ich tun?",
+      "When does a finder acquire ownership of lost property?"
+    ],
+    "aliases": [
+      "Fundsache melden aufbewahren",
+      "Finder Eigentum nach Frist",
+      "found lost item report safekeep",
+      "finder ownership after six months"
+    ],
+    "note": "Lost property duties."
+  }
+]

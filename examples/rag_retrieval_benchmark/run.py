@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import random
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -29,6 +30,8 @@ def main() -> None:
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     parser.add_argument("--split", choices=["valid", "reformulated"], default="valid")
     parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--sample-mode", choices=["first", "even", "random"], default="first")
+    parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--top-ks", default="1,3,5,10")
     parser.add_argument("--chunk-tokens", type=int, default=220)
     parser.add_argument("--chunk-stride", type=int, default=110)
@@ -44,7 +47,12 @@ def main() -> None:
     source_anchors = load_jsonl(data_dir / "anchors.jsonl")
     anchors = add_distractor_copies(source_anchors, copies=args.distractor_copies)
     train = load_jsonl(data_dir / "train.jsonl")
-    examples = load_jsonl(data_dir / f"{args.split}.jsonl")[: args.limit]
+    examples = _select_examples(
+        load_jsonl(data_dir / f"{args.split}.jsonl"),
+        limit=args.limit,
+        mode=args.sample_mode,
+        seed=args.seed,
+    )
     top_ks = tuple(int(part) for part in args.top_ks.split(",") if part.strip())
 
     reports = {
@@ -86,6 +94,8 @@ def main() -> None:
             "expand": args.expand,
             "distractor_copies": args.distractor_copies,
             "views_jsonl": args.views_jsonl,
+            "sample_mode": args.sample_mode,
+            "seed": args.seed,
         },
         "reports": reports,
         "interpretation": [
@@ -101,6 +111,21 @@ def main() -> None:
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(json.dumps(payload, indent=2))
     print(f"\nWrote retrieval benchmark to {output}")
+
+
+def _select_examples(examples: list[dict], *, limit: int, mode: str, seed: int) -> list[dict]:
+    if limit <= 0 or limit >= len(examples):
+        return examples
+    if mode == "first":
+        return examples[:limit]
+    if mode == "random":
+        rng = random.Random(seed)
+        indexes = sorted(rng.sample(range(len(examples)), limit))
+        return [examples[index] for index in indexes]
+    if limit == 1:
+        return [examples[0]]
+    indexes = sorted({round(index * (len(examples) - 1) / (limit - 1)) for index in range(limit)})
+    return [examples[index] for index in indexes[:limit]]
 
 
 if __name__ == "__main__":

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Refmark Semantic Find Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+      color: #1c2430;
+      background: #f6f7f9;
+    }
+    body {
+      margin: 0;
+    }
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 112px 24px 72px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0 0 16px;
+    }
+    section {
+      padding: 22px 0;
+      border-top: 1px solid #d7dde5;
+      scroll-margin-top: 110px;
+    }
+    code {
+      background: #e9edf3;
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .refmark-search-panel {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      z-index: 20;
+      width: min(720px, calc(100vw - 32px));
+      transform: translateX(-50%);
+      background: #ffffff;
+      border: 1px solid #cbd4df;
+      border-radius: 8px;
+      box-shadow: 0 16px 38px rgba(20, 30, 45, 0.16);
+      overflow: hidden;
+    }
+    .refmark-search-input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 14px 16px;
+      border: 0;
+      border-bottom: 1px solid #dce2ea;
+      font: inherit;
+      outline: none;
+    }
+    .refmark-search-results {
+      max-height: 280px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      overflow: auto;
+    }
+    .refmark-search-result button {
+      display: grid;
+      gap: 2px;
+      width: 100%;
+      padding: 10px 16px;
+      border: 0;
+      border-bottom: 1px solid #edf1f5;
+      background: #fff;
+      color: inherit;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+    }
+    .refmark-search-result button:hover {
+      background: #f2f6fb;
+    }
+    .refmark-search-result span {
+      color: #526273;
+      font-size: 14px;
+    }
+    .refmark-active-hit {
+      outline: 3px solid #2774d8;
+      outline-offset: 8px;
+      background: #f0f7ff;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Deployment Guide</h1>
+    <p>This page demonstrates Refmark semantic find: type a question and jump directly to a narrow evidence region.</p>
+
+    <section data-refmark-ref="deployment:P01" id="deployment-P01">
+      <h2>Release Window</h2>
+      <p>Production releases happen between 09:00 and 15:00 UTC. Changes outside that window require incident commander approval and a rollback owner on call.</p>
+    </section>
+
+    <section data-refmark-ref="deployment:P02" id="deployment-P02">
+      <h2>Rollback Plan</h2>
+      <p>Rollback plans keep the previous image available for twenty-four hours. Operators should verify database migrations are reversible before deployment starts.</p>
+    </section>
+
+    <section data-refmark-ref="security:P01" id="security-P01">
+      <h2>Token Rotation</h2>
+      <p>Service tokens rotate every 90 days after replacement credentials are deployed. Expired tokens are disabled only after health checks confirm the new credentials.</p>
+    </section>
+
+    <section data-refmark-ref="security:P02" id="security-P02">
+      <h2>Audit Retention</h2>
+      <p>Audit logs are retained for 180 days by default. Finance and regulated customer workspaces can extend retention to one year by policy override.</p>
+    </section>
+  </main>
+
+  <script src="../../refmark/browser_search.js"></script>
+  <script>
+    const index = {
+      schema: "refmark.browser_search_index.v1",
+      settings: { k1: 1.5, b: 0.75 },
+      avg_len: 27.5,
+      lengths: [28, 28, 27, 27],
+      regions: [
+        { doc_id: "deployment", region_id: "P01", stable_ref: "deployment:P01", summary: "Production release windows and approval rules." },
+        { doc_id: "deployment", region_id: "P02", stable_ref: "deployment:P02", summary: "Rollback plans and reversible migration checks." },
+        { doc_id: "security", region_id: "P01", stable_ref: "security:P01", summary: "Service token rotation after replacement credentials are deployed." },
+        { doc_id: "security", region_id: "P02", stable_ref: "security:P02", summary: "Audit log retention periods and policy overrides." }
+      ],
+      postings: {
+        "production": { idf: 1.2039728, p: [[0, 1]] },
+        "release": { idf: 1.2039728, p: [[0, 1]] },
+        "approval": { idf: 1.2039728, p: [[0, 1]] },
+        "rollback": { idf: 1.2039728, p: [[1, 1]] },
+        "migration": { idf: 1.2039728, p: [[1, 1]] },
+        "token": { idf: 1.2039728, p: [[2, 1]] },
+        "rotation": { idf: 1.2039728, p: [[2, 1]] },
+        "credentials": { idf: 1.2039728, p: [[2, 1]] },
+        "audit": { idf: 1.2039728, p: [[3, 1]] },
+        "logs": { idf: 1.2039728, p: [[3, 1]] },
+        "retention": { idf: 1.2039728, p: [[3, 1]] },
+        "policy": { idf: 1.2039728, p: [[3, 1]] }
+      }
+    };
+    RefmarkSearch.attachPageSearch(index, { topK: 4, placeholder: "Ask this page..." });
+  </script>
+</body>
+</html>

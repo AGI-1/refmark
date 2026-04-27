@@ -1,0 +1,57 @@
+[
+  {
+    "category": "expected",
+    "query": "Kündigungsfrist Wohnung",
+    "expected_prefixes": ["bgb:S_573c"],
+    "note": "Common wording should reach ordinary residential termination periods."
+  },
+  {
+    "category": "expected",
+    "query": "Geschäftsfähigkeit Minderjährige",
+    "expected_prefixes": ["bgb:S_106"],
+    "note": "Should find limited capacity of minors."
+  },
+  {
+    "category": "expected",
+    "query": "Erbschaft ausschlagen",
+    "expected_prefixes": ["bgb:S_1942", "bgb:S_1943"],
+    "note": "Should find inheritance disclaimer provisions."
+  },
+  {
+    "category": "expected",
+    "query": "Mietminderung Mangel",
+    "expected_prefixes": ["bgb:S_536"],
+    "note": "Should find rent reduction for defects."
+  },
+  {
+    "category": "expected",
+    "query": "digitale Produkte Mangel",
+    "expected_prefixes": ["bgb:S_327", "bgb:S_327i", "bgb:S_327m", "bgb:S_475a"],
+    "note": "Broad digital product defects can validly land in several nearby provisions."
+  },
+  {
+    "category": "ambiguous",
+    "query": "Frist",
+    "note": "Intentionally too broad; should not be treated as a confident answer."
+  },
+  {
+    "category": "ambiguous",
+    "query": "Mangel",
+    "note": "Appears in several legal contexts."
+  },
+  {
+    "category": "ambiguous",
+    "query": "Name",
+    "note": "Short lexical query with many possible legal meanings."
+  },
+  {
+    "category": "no_answer",
+    "query": "Python package installieren",
+    "note": "Out-of-domain software query."
+  },
+  {
+    "category": "no_answer",
+    "query": "Kubernetes pod DNS konfigurieren",
+    "note": "Out-of-domain technical documentation query."
+  }
+]

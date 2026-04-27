@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import difflib
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -128,6 +130,8 @@ def _infer_patch_format(raw_patch: Any) -> str | None:
     if isinstance(raw_patch, dict):
         if isinstance(raw_patch.get("patch"), str) or isinstance(raw_patch.get("diff"), str):
             return "unified_diff"
+        if "original_text" in raw_patch or "search" in raw_patch:
+            return "search_replace"
         edits = raw_patch.get("edits")
     else:
         edits = raw_patch
@@ -144,6 +148,11 @@ def _infer_patch_format(raw_patch: Any) -> str | None:
 def _repair_edit_payload(edit: dict[str, Any]) -> dict[str, Any]:
     repaired = dict(edit)
     action = str(repaired.get("action", "replace")).lower()
+    if action != "insert_before" and not repaired.get("region_id") and not repaired.get("start_ref"):
+        anchor_ref = _normalize_anchor_ref(repaired.get("anchor_ref"))
+        if anchor_ref and anchor_ref != "EOF":
+            repaired["region_id"] = anchor_ref
+            repaired.pop("anchor_ref", None)
     if action == "patch_within":
         region_id = _normalize_ref_id(repaired.get("region_id"))
         start_ref = _normalize_ref_id(repaired.get("start_ref"))
@@ -200,6 +209,38 @@ def _replacement_text_for_edit(edit: dict[str, Any]) -> str:
     return str(edit.get("new_content", ""))
 
 
+def _source_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _unified_preview_diff(path: Path, before: str, after: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"{path}",
+            tofile=f"{path} (refmark)",
+        )
+    )
+
+
+def _changed_regions_from_edits(edits: list[dict[str, Any]], created_regions: list[dict[str, Any]]) -> list[str]:
+    changed: list[str] = []
+    for edit in edits:
+        action = str(edit.get("action", "replace")).lower()
+        if action == "insert_before":
+            continue
+        for key in ("region_id", "start_ref"):
+            value = _normalize_ref_id(edit.get(key))
+            if value and value not in changed:
+                changed.append(value)
+    for region in created_regions:
+        value = str(region.get("region_id", "")).strip()
+        if value and value not in changed:
+            changed.append(value)
+    return changed
+
+
 def _normalize_line_patch_edits(raw_patch: Any) -> list[dict[str, Any]]:
     if isinstance(raw_patch, dict):
         edits = raw_patch.get("edits")
@@ -235,7 +276,12 @@ def _normalize_line_patch_edits(raw_patch: Any) -> list[dict[str, Any]]:
 
 def _normalize_search_replace_patch(raw_patch: Any) -> list[dict[str, Any]]:
     if isinstance(raw_patch, dict):
-        edits = raw_patch.get("edits")
+        if "edits" in raw_patch:
+            edits = raw_patch.get("edits")
+        elif "original_text" in raw_patch or "search" in raw_patch:
+            edits = [raw_patch]
+        else:
+            edits = None
     else:
         edits = raw_patch
     if not isinstance(edits, list):
@@ -245,8 +291,8 @@ def _normalize_search_replace_patch(raw_patch: Any) -> list[dict[str, Any]]:
     for index, entry in enumerate(edits, start=1):
         if not isinstance(entry, dict):
             raise ValueError(f"search_replace entry {index} must be an object.")
-        original_text = entry.get("original_text")
-        new_content = entry.get("new_content")
+        original_text = entry.get("original_text", entry.get("search"))
+        new_content = entry.get("new_content", entry.get("replace"))
         if not isinstance(original_text, str) or not original_text:
             raise ValueError(f"search_replace entry {index} requires non-empty original_text.")
         if not isinstance(new_content, str):
@@ -311,8 +357,13 @@ def _expected_text_variants(expected_text: str) -> list[str]:
     variants = [expected_text]
     if "\\n" in expected_text or "\\t" in expected_text:
         variants.append(expected_text.replace("\\n", "\n").replace("\\t", "\t"))
+    if '\\"' in expected_text or "\\'" in expected_text:
+        variants.append(expected_text.replace('\\"', '"').replace("\\'", "'"))
     if not expected_text.endswith("\n"):
         variants.append(expected_text + "\n")
+    for variant in list(variants):
+        if not variant.endswith("\n"):
+            variants.append(variant + "\n")
 
     deduped: list[str] = []
     for variant in variants:
@@ -725,6 +776,9 @@ def apply_ref_diff(
     edits: list[dict[str, Any]],
     *,
     expect_live_markers: bool | None = None,
+    dry_run: bool = False,
+    base_hash: str | None = None,
+    include_diff: bool = False,
 ) -> dict[str, Any]:
     """Apply multiple refmark-scoped edits to a single file.
 
@@ -736,6 +790,23 @@ def apply_ref_diff(
     marker_format = _select_marker_format(path)
     chunker = _select_chunker(path)
     current_content = path.read_text(encoding="utf-8")
+    source_hash = _source_hash(current_content)
+    if base_hash and base_hash != source_hash:
+        return {
+            "ok": False,
+            "file_path": str(path),
+            "applied_edits": 0,
+            "created_regions": [],
+            "changed_regions": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_seconds": 0.0,
+            "syntax_ok": False,
+            "dry_run": dry_run,
+            "source_hash": source_hash,
+            "output_hash": None,
+            "errors": ["Base hash mismatch; file changed since the caller inspected it."],
+        }
     was_premarked = _detect_premarked(current_content, marker_format=marker_format)
 
     if expect_live_markers is True and not was_premarked:
@@ -747,6 +818,9 @@ def apply_ref_diff(
             "output_tokens": 0,
             "latency_seconds": 0.0,
             "syntax_ok": False,
+            "dry_run": dry_run,
+            "source_hash": source_hash,
+            "output_hash": None,
             "errors": ["File does not contain live refmarks, but expect_live_markers was true."],
         }
 
@@ -795,7 +869,12 @@ def apply_ref_diff(
     if not syntax_ok:
         apply_errors.append(f"Edited file is not syntactically valid for {path.suffix or 'this language'}.")
 
-    if not apply_errors:
+    output_content = next_marked if was_premarked else next_code
+    output_hash = _source_hash(output_content)
+    changed_regions = _changed_regions_from_edits(edits, created_regions)
+    preview_diff = _unified_preview_diff(path, current_content, output_content) if include_diff else None
+
+    if not apply_errors and not dry_run:
         if was_premarked:
             path.write_text(next_marked, encoding="utf-8")
         else:
@@ -806,9 +885,14 @@ def apply_ref_diff(
         "file_path": str(path),
         "applied_edits": 0 if apply_errors else len([edit for edit in edits if isinstance(edit, dict)]),
         "created_regions": created_regions,
+        "changed_regions": changed_regions if not apply_errors else [],
         "input_tokens": 0,
         "output_tokens": 0,
         "latency_seconds": 0.0,
         "syntax_ok": syntax_ok,
+        "dry_run": dry_run,
+        "source_hash": source_hash,
+        "output_hash": output_hash if not apply_errors else None,
+        "diff": preview_diff,
         "errors": apply_errors,
     }

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import html
 import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from refmark.edit import _remove_rfm_header
 from refmark.regions import _normalize_region_key, _parse_blocks_with_mode
 from refmark.config import refmark_home
 from refmark.core import strip
+from refmark.citations import parse_citation_refs
 from refmark.shadow_session import load_or_build_view_state
 
 
@@ -68,23 +68,19 @@ def _ordered_blocks(view_state: dict) -> list[tuple[str, dict]]:
 def _expand_refs(refs: list[str], ordered_ids: list[str]) -> list[str]:
     index = {value: idx for idx, value in enumerate(ordered_ids)}
     resolved: list[str] = []
-    for raw_ref in refs:
-        token = raw_ref.strip()
-        if not token:
-            continue
-        match = re.fullmatch(r"([A-Za-z]+\d+)\s*(?:-|\.\.)\s*([A-Za-z]+\d+)", token)
-        if match:
-            start = _normalize_region_key(match.group(1))
-            end = _normalize_region_key(match.group(2))
+    for citation in parse_citation_refs(refs):
+        if citation.is_range:
+            start = _normalize_region_key(citation.ref)
+            end = _normalize_region_key(citation.end_ref or "")
             if start not in index or end not in index:
-                raise ValueError(f"Unknown ref range '{token}'.")
+                raise ValueError(f"Unknown ref range '{citation.stable_ref}-{citation.stable_end_ref}'.")
             lo = min(index[start], index[end])
             hi = max(index[start], index[end])
             resolved.extend(ordered_ids[lo : hi + 1])
             continue
-        normalized = _normalize_region_key(token)
+        normalized = _normalize_region_key(citation.ref)
         if normalized not in index:
-            raise ValueError(f"Unknown ref '{token}'.")
+            raise ValueError(f"Unknown ref '{citation.stable_ref}'.")
         resolved.append(normalized)
 
     unique: list[str] = []

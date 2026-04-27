@@ -1,0 +1,13 @@
+{
+  "name": "refmark-static-search-benchmark",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "benchmark": "node compare_static_search_engines.js"
+  },
+  "dependencies": {
+    "flexsearch": "^0.8.212",
+    "lunr": "^2.3.9",
+    "minisearch": "^7.2.0"
+  }
+}

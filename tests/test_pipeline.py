@@ -28,6 +28,22 @@ def test_build_region_manifest_and_expand_neighbors():
     assert [record.region_id for record in expanded] == ["P01", "P02", "P03"]
 
 
+def test_build_region_manifest_assigns_markdown_heading_parent_regions():
+    _marked, records = build_region_manifest(
+        "# Security\n\nToken rotation details.\n\nAudit retention details.\n\n# Billing\n\nInvoice export details.\n",
+        ".md",
+        doc_id="doc",
+    )
+
+    assert records[0].parent_region_id is None
+    assert [record.parent_region_id for record in records[1:3]] == ["P01", "P01"]
+    assert records[4].parent_region_id == "P04"
+
+    expanded = expand_region_context(records, ["P02"], same_parent=True, include_parent=True)
+
+    assert [record.region_id for record in expanded] == ["P01", "P02", "P03"]
+
+
 def test_manifest_jsonl_roundtrip(tmp_path):
     _marked, records = build_region_manifest("One.\n\nTwo.\n", ".txt", doc_id="doc")
     path = tmp_path / "manifest.jsonl"
@@ -142,6 +158,9 @@ def test_pipeline_cli_map_expand_and_align(tmp_path):
     source = tmp_path / "source.txt"
     target = tmp_path / "target.txt"
     manifest = tmp_path / "manifest.jsonl"
+    marked_source = tmp_path / "source_marked.txt"
+    marked_target = tmp_path / "target_marked.txt"
+    coverage_html = tmp_path / "coverage.html"
     source.write_text("Expedited shipping is charged.\n\nRefunds vary.\n", encoding="utf-8")
     target.write_text("Invoice totals include expedited shipping.\n\nRefund policy depends on tier.\n", encoding="utf-8")
 
@@ -170,7 +189,23 @@ def test_pipeline_cli_map_expand_and_align(tmp_path):
         text=True,
     )
     aligned = subprocess.run(
-        [sys.executable, "-m", "refmark.cli", "align", str(source), str(target), "--top-k", "1"],
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "align",
+            str(source),
+            str(target),
+            "--top-k",
+            "1",
+            "--marked-source",
+            str(marked_source),
+            "--marked-target",
+            str(marked_target),
+            "--coverage-html",
+            str(coverage_html),
+            "--no-expanded-evidence",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -180,3 +215,179 @@ def test_pipeline_cli_map_expand_and_align(tmp_path):
     aligned_payload = json.loads(aligned.stdout)
     assert [item["region_id"] for item in expanded_payload] == ["P01", "P02"]
     assert aligned_payload[0][0]["target_region_id"] == "P01"
+    assert "[@" in marked_source.read_text(encoding="utf-8")
+    assert "[@" in marked_target.read_text(encoding="utf-8")
+    assert "Expanded Evidence" not in coverage_html.read_text(encoding="utf-8")
+    assert "Wrote marked source" in aligned.stderr
+
+
+def test_pipeline_cli_expand_same_parent(tmp_path):
+    source = tmp_path / "source.md"
+    manifest = tmp_path / "manifest.jsonl"
+    source.write_text("# Security\n\nToken rotation.\n\nAudit retention.\n\n# Billing\n\nInvoice export.\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest), "--min-words", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expanded = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "expand",
+            str(manifest),
+            "--refs",
+            "P02",
+            "--same-parent",
+            "--include-parent",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    expanded_payload = json.loads(expanded.stdout)
+    assert [item["region_id"] for item in expanded_payload] == ["P01", "P02", "P03"]
+
+
+def test_pipeline_cli_expand_rejects_invalid_citation_refs(tmp_path):
+    source = tmp_path / "source.txt"
+    manifest = tmp_path / "manifest.jsonl"
+    source.write_text("Alpha.\n\nBeta.\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest), "--min-words", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expanded = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "expand",
+            str(manifest),
+            "--refs",
+            "not-a-ref",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert expanded.returncode == 1
+    assert "Invalid citation ref" in expanded.stderr
+
+
+def test_pipeline_cli_pack_context(tmp_path):
+    source = tmp_path / "source.txt"
+    manifest = tmp_path / "manifest.jsonl"
+    source.write_text("Alpha evidence.\n\nBeta evidence.\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest), "--min-words", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    packed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "pack-context",
+            str(manifest),
+            "--refs",
+            "source:P01-source:P02",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(packed.stdout)
+    assert payload["refs"] == ["source:P01", "source:P02"]
+    assert "Alpha evidence" in payload["text"]
+
+
+def test_pipeline_cli_question_prompt_supports_overridable_template(tmp_path):
+    source = tmp_path / "source.txt"
+    manifest = tmp_path / "manifest.jsonl"
+    template = tmp_path / "template.txt"
+    source.write_text("Alpha evidence.\n\nBeta evidence.\n", encoding="utf-8")
+    template.write_text("refs={refs}\njson={refs_json}\ncontext={context}\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest), "--min-words", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    prompt = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "question-prompt",
+            str(manifest),
+            "--refs",
+            "source:P01-source:P02",
+            "--template",
+            str(template),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "refs=source:P01, source:P02" in prompt.stdout
+    assert '"source:P01"' in prompt.stdout
+    assert "Beta evidence" in prompt.stdout
+
+
+def test_pipeline_cli_eval_index(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    examples = tmp_path / "examples.jsonl"
+    source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
+    examples.write_text(
+        json.dumps({"query": "refunds within 30 days", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    evaluated = subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "eval-index", str(index), str(examples), "--top-k", "2"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(evaluated.stdout)
+    assert payload["metrics"]["count"] == 1.0
+    assert payload["metrics"]["hit_at_k"] == 1.0
+    assert payload["validation"] == {"missing": [], "ambiguous": []}

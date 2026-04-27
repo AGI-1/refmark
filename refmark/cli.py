@@ -1,19 +1,23 @@
 import sys
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from refmark.config import load_local_env
 
 load_local_env()
 
+from refmark.citations import citation_refs_to_strings, parse_citation_refs
 from refmark.core import inject, strip
 from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
+from refmark.discovery import discover_corpus, write_discovery
 from refmark.edit import apply_ref_diff
 from refmark.highlight import highlight_refs, render_highlight_html, render_highlight_json, render_highlight_text
 from refmark.languages import choose_edit_chunker, choose_live_marker_format, list_supported_languages
 from refmark.pipeline import (
+    RegionRecord,
     align_region_records,
     build_region_manifest,
     evaluate_alignment_coverage,
@@ -23,7 +27,26 @@ from refmark.pipeline import (
     write_manifest,
 )
 from refmark.prompt import build_reference_prompt
+from refmark.provenance import build_eval_provenance, validate_provenance
+from refmark.rag_eval import CorpusMap, EvalSuite
+from refmark.search_index import OPENROUTER_CHAT_URL, build_search_index, export_browser_search_index, load_search_index
 from refmark.workflow_config import WorkflowConfig, load_workflow_config, resolve_workflow_config
+
+
+DEFAULT_QUESTION_PROMPT_TEMPLATE = """You are generating retrieval evaluation questions for a refmarked corpus.
+
+Gold evidence refs: {refs}
+Language: {language}
+Question count: {count}
+
+Write {count} natural user questions that are answerable from the evidence
+below. The questions should require recovering the listed refs or range, not
+only matching a keyword. Return JSONL only, one object per line:
+{{"query":"...","gold_refs":{refs_json},"notes":"why this evidence is required"}}
+
+Evidence:
+{context}
+"""
 
 
 def main():
@@ -55,6 +78,9 @@ def main():
     refdiff_parser.add_argument("file", help="Path to the file to process.")
     refdiff_parser.add_argument("--edits-json", default=None, help="Inline JSON payload with an edits array.")
     refdiff_parser.add_argument("--edits-file", default=None, help="Path to a JSON file containing an edits array.")
+    refdiff_parser.add_argument("--dry-run", action="store_true", help="Validate and preview without writing the file.")
+    refdiff_parser.add_argument("--base-hash", default=None, help="Expected SHA-256 of the current source file.")
+    refdiff_parser.add_argument("--diff", action="store_true", help="Include a unified diff preview in the JSON result.")
 
     highlight_parser = subparsers.add_parser("highlight", help="Render cited refs back into reviewable source snippets.")
     highlight_parser.add_argument("file", help="Path to the file to inspect.")
@@ -87,6 +113,8 @@ def main():
     expand_parser.add_argument("--doc-id", default=None, help="Optional document id to scope expansion.")
     expand_parser.add_argument("--before", type=int, default=0, help="Number of previous regions to include.")
     expand_parser.add_argument("--after", type=int, default=0, help="Number of following regions to include.")
+    expand_parser.add_argument("--same-parent", action="store_true", help="Include regions with the same parent_region_id.")
+    expand_parser.add_argument("--include-parent", action="store_true", help="Include the parent region when using --same-parent.")
     expand_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
 
     align_parser = subparsers.add_parser("align", help="Map source document regions to target document regions.")
@@ -96,7 +124,112 @@ def main():
     align_parser.add_argument("--coverage-html", default=None, help="Optional HTML coverage review output path.")
     align_parser.add_argument("--coverage-json", default=None, help="Optional JSON coverage review output path.")
     align_parser.add_argument("--summary-json", default=None, help="Optional coverage summary JSON output path.")
+    align_parser.add_argument("--marked-source", default=None, help="Optional marked source text output path.")
+    align_parser.add_argument("--marked-target", default=None, help="Optional marked target text output path.")
+    align_parser.add_argument("--no-expanded-evidence", action="store_true", help="Omit expanded evidence cards from coverage HTML.")
     align_parser.add_argument("--layout", choices=["side-by-side", "stacked"], default="side-by-side", help="HTML report layout.")
+
+    build_index_parser = subparsers.add_parser(
+        "build-index",
+        help="Build a portable Refmark BM25 search index from a document corpus.",
+    )
+    build_index_parser.add_argument("corpus", help="Input file or directory.")
+    build_index_parser.add_argument("-o", "--output", required=True, help="Output index JSON path.")
+    build_index_parser.add_argument("--source", choices=["local", "openrouter"], default="local")
+    build_index_parser.add_argument("--model", default="mistralai/mistral-nemo")
+    build_index_parser.add_argument("--endpoint", default=OPENROUTER_CHAT_URL)
+    build_index_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
+    build_index_parser.add_argument("--extensions", default="txt,md,rst,html,htm,docx,pdf")
+    build_index_parser.add_argument("--format", dest="marker_format", default="typed_bracket")
+    build_index_parser.add_argument("--chunker", default="paragraph")
+    build_index_parser.add_argument("--tokens-per-chunk", type=int, default=None)
+    build_index_parser.add_argument("--lines-per-chunk", type=int, default=None)
+    build_index_parser.add_argument("--min-words", type=int, default=8)
+    build_index_parser.add_argument("--questions-per-region", type=int, default=4)
+    build_index_parser.add_argument("--keywords-per-region", type=int, default=8)
+    build_index_parser.add_argument("--metadata-only", action="store_true", help="Do not include source text in BM25 index text.")
+    build_index_parser.add_argument("--limit", type=int, default=None, help="Optional region limit for probes.")
+    build_index_parser.add_argument(
+        "--exclude-glob",
+        action="append",
+        default=[],
+        help="Glob pattern for source paths to skip. May be passed multiple times.",
+    )
+    build_index_parser.add_argument("--concurrency", type=int, default=4)
+    build_index_parser.add_argument("--sleep", type=float, default=0.0)
+    build_index_parser.add_argument("--view-cache", default=None, help="Optional JSONL cache for generated retrieval views.")
+
+    search_index_parser = subparsers.add_parser(
+        "search-index",
+        help="Search a portable Refmark BM25 search index.",
+    )
+    search_index_parser.add_argument("index", help="Index JSON produced by build-index.")
+    search_index_parser.add_argument("query", help="Search query.")
+    search_index_parser.add_argument("--top-k", type=int, default=5)
+    search_index_parser.add_argument("--strategy", choices=["flat", "hierarchical", "rerank"], default="flat")
+    search_index_parser.add_argument("--doc-top-k", type=int, default=5)
+    search_index_parser.add_argument("--candidate-k", type=int, default=30)
+    search_index_parser.add_argument("--expand-before", type=int, default=0)
+    search_index_parser.add_argument("--expand-after", type=int, default=0)
+    search_index_parser.add_argument("--json", action="store_true", help="Emit JSON hits.")
+
+    eval_index_parser = subparsers.add_parser(
+        "eval-index",
+        help="Evaluate a portable Refmark search index against JSONL query/gold_refs examples.",
+    )
+    eval_index_parser.add_argument("index", help="Index JSON produced by build-index.")
+    eval_index_parser.add_argument("examples", help="JSONL rows with query and gold_refs fields.")
+    eval_index_parser.add_argument("--top-k", type=int, default=10)
+    eval_index_parser.add_argument("--strategy", choices=["flat", "hierarchical", "rerank"], default="flat")
+    eval_index_parser.add_argument("--doc-top-k", type=int, default=5)
+    eval_index_parser.add_argument("--candidate-k", type=int, default=30)
+    eval_index_parser.add_argument("--expand-before", type=int, default=0)
+    eval_index_parser.add_argument("--expand-after", type=int, default=0)
+    eval_index_parser.add_argument("--provenance-out", default=None, help="Optional provenance JSON output path.")
+    eval_index_parser.add_argument("--expect-provenance", default=None, help="Fail if current inputs/settings differ from this provenance JSON.")
+    eval_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    pack_context_parser = subparsers.add_parser(
+        "pack-context",
+        help="Pack refs/ranges from a manifest into an ordered evidence text bundle.",
+    )
+    pack_context_parser.add_argument("manifest", help="Manifest JSONL path.")
+    pack_context_parser.add_argument("--refs", required=True, help="Comma-separated refs or ranges.")
+    pack_context_parser.add_argument("--format", choices=["text", "json"], default="text")
+    pack_context_parser.add_argument("-o", "--output", default=None)
+
+    question_prompt_parser = subparsers.add_parser(
+        "question-prompt",
+        help="Build an overridable LLM prompt for question generation from manifest refs/ranges.",
+    )
+    question_prompt_parser.add_argument("manifest", help="Manifest JSONL path.")
+    question_prompt_parser.add_argument("--refs", required=True, help="Refs/ranges to use as the gold evidence target.")
+    question_prompt_parser.add_argument("--language", default="English", help="Question language to request.")
+    question_prompt_parser.add_argument("--count", type=int, default=3, help="Number of questions to request.")
+    question_prompt_parser.add_argument("--template", default=None, help="Optional prompt template file.")
+    question_prompt_parser.add_argument("-o", "--output", default=None)
+
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Create a corpus discovery manifest for retrieval evaluation and question generation.",
+    )
+    discover_parser.add_argument("manifest", help="Manifest JSONL path.")
+    discover_parser.add_argument("-o", "--output", required=True, help="Discovery JSON output path.")
+    discover_parser.add_argument("--mode", choices=["whole", "hierarchical"], default="whole")
+    discover_parser.add_argument("--source", choices=["local", "openrouter"], default="local")
+    discover_parser.add_argument("--model", default="local")
+    discover_parser.add_argument("--endpoint", default=OPENROUTER_CHAT_URL)
+    discover_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
+    discover_parser.add_argument("--max-input-tokens", type=int, default=180000)
+
+    browser_index_parser = subparsers.add_parser(
+        "export-browser-index",
+        help="Export a compact browser-searchable BM25 index from a portable Refmark index.",
+    )
+    browser_index_parser.add_argument("index", help="Index JSON produced by build-index.")
+    browser_index_parser.add_argument("-o", "--output", required=True, help="Browser index JSON output path.")
+    browser_index_parser.add_argument("--no-text", action="store_true", help="Omit region text/snippets from browser payload.")
+    browser_index_parser.add_argument("--max-text-chars", type=int, default=900, help="Max snippet characters per region.")
 
     smoke_parser = subparsers.add_parser("smoke", help="Run a deterministic public-artifact smoke check.")
     smoke_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
@@ -121,6 +254,20 @@ def main():
         _handle_expand(args)
     elif args.command == "align":
         _handle_align(args)
+    elif args.command == "build-index":
+        _handle_build_index(args)
+    elif args.command == "search-index":
+        _handle_search_index(args)
+    elif args.command == "eval-index":
+        _handle_eval_index(args)
+    elif args.command == "pack-context":
+        _handle_pack_context(args)
+    elif args.command == "question-prompt":
+        _handle_question_prompt(args)
+    elif args.command == "discover":
+        _handle_discover(args)
+    elif args.command == "export-browser-index":
+        _handle_export_browser_index(args)
     elif args.command == "smoke":
         _handle_smoke(args)
 
@@ -199,7 +346,13 @@ def _handle_apply_ref_diff(args):
         print("Error: Payload must be a JSON array or an object with an 'edits' array.", file=sys.stderr)
         sys.exit(1)
 
-    result = apply_ref_diff(args.file, edits)
+    result = apply_ref_diff(
+        args.file,
+        edits,
+        dry_run=args.dry_run,
+        base_hash=args.base_hash,
+        include_diff=args.diff,
+    )
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
         sys.exit(1)
@@ -256,6 +409,279 @@ def _handle_enrich_prompt(args):
         print(f"[OK] Wrote prompt with {result.marker_count} regions to {args.output}", file=sys.stderr)
     else:
         sys.stdout.write(result.prompt)
+
+
+def _handle_build_index(args):
+    extensions = tuple(part.strip() for part in args.extensions.split(",") if part.strip())
+    payload = build_search_index(
+        args.corpus,
+        args.output,
+        source=args.source,
+        model=args.model,
+        endpoint=args.endpoint,
+        api_key_env=args.api_key_env,
+        extensions=extensions,
+        marker_format=args.marker_format,
+        chunker=args.chunker,
+        tokens_per_chunk=args.tokens_per_chunk,
+        lines_per_chunk=args.lines_per_chunk,
+        min_words=args.min_words,
+        questions_per_region=args.questions_per_region,
+        keywords_per_region=args.keywords_per_region,
+        include_source=not args.metadata_only,
+        limit=args.limit,
+        concurrency=args.concurrency,
+        sleep=args.sleep,
+        view_cache_path=args.view_cache,
+        exclude_globs=args.exclude_glob,
+    )
+    stats = payload["stats"]
+    print(f"[OK] Wrote Refmark search index to {args.output}", file=sys.stderr)
+    print(
+        "[OK] "
+        f"{stats['documents']} documents, {stats['regions']} regions, "
+        f"~{stats['approx_input_tokens']} input tokens, "
+        f"estimated OpenRouter cost at mistral-nemo: ${stats['approx_openrouter_cost_usd_at_mistral_nemo']}",
+        file=sys.stderr,
+    )
+
+
+def _handle_search_index(args):
+    index = load_search_index(args.index)
+    if args.strategy == "hierarchical":
+        hits = index.search_hierarchical(
+            args.query,
+            top_k=args.top_k,
+            doc_top_k=args.doc_top_k,
+            candidate_k=args.candidate_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+    elif args.strategy == "rerank":
+        hits = index.search_reranked(
+            args.query,
+            top_k=args.top_k,
+            candidate_k=args.candidate_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+    else:
+        hits = index.search(
+            args.query,
+            top_k=args.top_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+    if args.json:
+        print(json.dumps([hit.to_dict() for hit in hits], indent=2))
+        return
+    for hit in hits:
+        print(f"{hit.rank}. {hit.stable_ref} score={hit.score}")
+        if hit.source_path:
+            print(f"   source: {hit.source_path}")
+        if hit.summary:
+            print(f"   summary: {hit.summary}")
+        if hit.context_refs:
+            print(f"   context: {', '.join(hit.context_refs)}")
+        snippet = " ".join(hit.text.split())
+        if len(snippet) > 260:
+            snippet = snippet[:257].rstrip() + "..."
+        print(f"   text: {snippet}")
+
+
+def _handle_eval_index(args):
+    index = load_search_index(args.index)
+    corpus = _corpus_from_search_index(index)
+    rows = _read_jsonl(args.examples)
+    suite = EvalSuite.from_rows(rows, corpus=corpus).with_source_hashes()
+    settings = {
+        "strategy": args.strategy,
+        "top_k": args.top_k,
+        "doc_top_k": args.doc_top_k,
+        "candidate_k": args.candidate_k,
+        "expand_before": args.expand_before,
+        "expand_after": args.expand_after,
+    }
+    provenance = build_eval_provenance(
+        index_path=args.index,
+        examples_path=args.examples,
+        settings=settings,
+        index_metadata=_read_index_metadata(args.index),
+    )
+    provenance_check = None
+    if args.expect_provenance:
+        expected = json.loads(Path(args.expect_provenance).read_text(encoding="utf-8-sig"))
+        provenance_check = validate_provenance(expected, provenance)
+        if not provenance_check["ok"]:
+            print(json.dumps({"provenance_check": provenance_check}, indent=2), file=sys.stderr)
+            sys.exit(2)
+
+    def retrieve(query: str):
+        if args.strategy == "hierarchical":
+            return index.search_hierarchical(
+                query,
+                top_k=args.top_k,
+                doc_top_k=args.doc_top_k,
+                candidate_k=args.candidate_k,
+                expand_before=args.expand_before,
+                expand_after=args.expand_after,
+            )
+        if args.strategy == "rerank":
+            return index.search_reranked(
+                query,
+                top_k=args.top_k,
+                candidate_k=args.candidate_k,
+                expand_before=args.expand_before,
+                expand_after=args.expand_after,
+            )
+        return index.search(
+            query,
+            top_k=args.top_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+
+    run = suite.evaluate(retrieve, name=args.strategy, k=args.top_k)
+    validation = suite.validate_refs()
+    stale = [item.to_dict() for item in suite.stale_examples()]
+    payload = {
+        "index": args.index,
+        "examples": args.examples,
+        "settings": settings,
+        "metrics": run.metrics,
+        "diagnostics": run.diagnostics,
+        "validation": validation,
+        "stale_examples": stale,
+        "provenance": provenance,
+        "provenance_check": provenance_check,
+        "results": [item.to_dict() for item in run.examples],
+    }
+    output = json.dumps(payload, indent=2)
+    if args.provenance_out:
+        Path(args.provenance_out).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+        print(f"[OK] Wrote eval provenance to {args.provenance_out}", file=sys.stderr)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote retrieval eval report to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
+def _handle_pack_context(args):
+    try:
+        refs = citation_refs_to_strings(parse_citation_refs(args.refs))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    pack = CorpusMap.from_manifest(args.manifest).context_pack(refs)
+    output = json.dumps(pack.to_dict(), indent=2) if args.format == "json" else pack.text
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote context pack with {len(pack.refs)} refs to {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(output)
+
+
+def _handle_question_prompt(args):
+    try:
+        refs = citation_refs_to_strings(parse_citation_refs(args.refs))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    corpus = CorpusMap.from_manifest(args.manifest)
+    pack = corpus.context_pack(refs)
+    template = (
+        Path(args.template).read_text(encoding="utf-8-sig")
+        if args.template
+        else DEFAULT_QUESTION_PROMPT_TEMPLATE
+    )
+    prompt = template.format(
+        count=max(args.count, 1),
+        language=args.language,
+        refs=", ".join(pack.refs),
+        refs_json=json.dumps(pack.refs, ensure_ascii=False),
+        context=pack.text,
+    )
+    if args.output:
+        Path(args.output).write_text(prompt, encoding="utf-8")
+        print(f"[OK] Wrote question-generation prompt for {len(pack.refs)} refs to {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(prompt)
+
+
+def _handle_discover(args):
+    records = read_manifest(args.manifest)
+    discovery = discover_corpus(
+        records,
+        mode=args.mode,
+        source=args.source,
+        model=args.model,
+        endpoint=args.endpoint,
+        api_key_env=args.api_key_env,
+        max_input_tokens=args.max_input_tokens,
+    )
+    write_discovery(discovery, args.output)
+    print(
+        f"[OK] Wrote discovery manifest for {discovery.regions} regions "
+        f"({discovery.corpus_tokens} tokens) to {args.output}",
+        file=sys.stderr,
+    )
+
+
+def _handle_export_browser_index(args):
+    payload = export_browser_search_index(
+        args.index,
+        args.output,
+        include_text=not args.no_text,
+        max_text_chars=args.max_text_chars,
+    )
+    stats = payload["stats"]
+    print(
+        f"[OK] Wrote browser Refmark index to {args.output} "
+        f"({stats['documents']} documents, {stats['regions']} regions, {stats['tokens']} tokens)",
+        file=sys.stderr,
+    )
+
+
+def _read_jsonl(path: str | Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected JSON object row in {path}.")
+        rows.append(payload)
+    return rows
+
+
+def _corpus_from_search_index(index) -> CorpusMap:
+    records = [
+        RegionRecord(
+            doc_id=region.doc_id,
+            region_id=region.region_id,
+            text=region.text,
+            start_line=region.ordinal,
+            end_line=region.ordinal,
+            ordinal=region.ordinal,
+            hash=region.hash,
+            source_path=region.source_path,
+            prev_region_id=region.prev_region_id,
+            next_region_id=region.next_region_id,
+        )
+        for region in index.regions
+    ]
+    return CorpusMap.from_records(records)
+
+
+def _read_index_metadata(path: str | Path) -> dict[str, object]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    return {
+        "schema": payload.get("schema"),
+        "source_corpus": payload.get("source_corpus"),
+        "settings": payload.get("settings", {}),
+        "stats": payload.get("stats", {}),
+    }
 
 
 def _add_workflow_config_args(parser):
@@ -330,13 +756,19 @@ def _handle_map(args):
 
 
 def _handle_expand(args):
-    refs = [ref.strip() for ref in args.refs.split(",") if ref.strip()]
+    try:
+        refs = citation_refs_to_strings(parse_citation_refs(args.refs))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     records = expand_region_context(
         read_manifest(args.manifest),
         refs,
         doc_id=args.doc_id,
         before=max(args.before, 0),
         after=max(args.after, 0),
+        same_parent=args.same_parent,
+        include_parent=args.include_parent,
     )
     if args.format == "json":
         print(json.dumps([record.to_dict() for record in records], indent=2))
@@ -365,10 +797,23 @@ def _handle_align(args):
             json.dumps([item.to_dict() for item in coverage], indent=2),
             encoding="utf-8",
         )
+        print(f"[OK] Wrote coverage JSON with {len(coverage)} source regions to {args.coverage_json}", file=sys.stderr)
     if args.coverage_html:
-        report.write_html(args.coverage_html, layout=args.layout)
+        report.write_html(
+            args.coverage_html,
+            layout=args.layout,
+            include_expanded_evidence=not args.no_expanded_evidence,
+        )
+        print(f"[OK] Wrote coverage HTML to {args.coverage_html}", file=sys.stderr)
     if args.summary_json:
         Path(args.summary_json).write_text(json.dumps(report.summary, indent=2), encoding="utf-8")
+        print(f"[OK] Wrote coverage summary to {args.summary_json}", file=sys.stderr)
+    if args.marked_source:
+        Path(args.marked_source).write_text(report.source.marked_text, encoding="utf-8")
+        print(f"[OK] Wrote marked source to {args.marked_source}", file=sys.stderr)
+    if args.marked_target:
+        Path(args.marked_target).write_text(report.target.marked_text, encoding="utf-8")
+        print(f"[OK] Wrote marked target to {args.marked_target}", file=sys.stderr)
     print(json.dumps([[candidate.to_dict() for candidate in row] for row in alignments], indent=2))
 
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import random
 import time
 from pathlib import Path
 import sys
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -31,6 +34,8 @@ def main() -> None:
     parser.add_argument("--output", default=str(OUTPUT_DIR / "views.jsonl"))
     parser.add_argument("--source", choices=["local", "openrouter"], default="local")
     parser.add_argument("--limit", type=int, default=0, help="0 means all anchors.")
+    parser.add_argument("--sample-mode", choices=["first", "even", "random"], default="first")
+    parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--questions-per-anchor", type=int, default=4)
     parser.add_argument("--keywords", type=int, default=10)
     parser.add_argument("--model", default="google/gemini-3.1-flash-lite-preview")
@@ -39,35 +44,46 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-tokens", type=int, default=450)
     parser.add_argument("--sleep", type=float, default=0.0)
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
     anchors = load_jsonl(data_dir / "anchors.jsonl")
     train = load_jsonl(data_dir / "train.jsonl")
-    if args.limit > 0:
-        anchors = anchors[: args.limit]
+    questions_by_ref = _questions_by_ref(train)
+    anchors = _select_anchors(anchors, limit=args.limit, mode=args.sample_mode, seed=args.seed)
 
     output = Path(args.output)
     existing = _load_existing(output) if args.resume else {}
-    rows: list[dict] = []
-    for idx, anchor in enumerate(anchors, start=1):
-        ref = str(anchor["refmark"])
-        if ref in existing:
-            rows.append(existing[ref])
-            continue
-        if args.source == "openrouter":
-            row = _openrouter_view(args, anchor)
-        else:
-            row = _local_view(anchor, train, questions_per_anchor=args.questions_per_anchor, keyword_limit=args.keywords)
-        rows.append(row)
-        write_jsonl(output, rows)
-        if args.sleep:
-            time.sleep(args.sleep)
-        print(f"{idx}/{len(anchors)} {ref} {args.source}")
+    row_by_ref = {ref: row for ref, row in existing.items() if ref in {str(anchor["refmark"]) for anchor in anchors}}
+    pending = [anchor for anchor in anchors if str(anchor["refmark"]) not in row_by_ref]
 
-    write_jsonl(output, rows)
-    print(f"Wrote {len(rows)} retrieval views to {output}")
+    if args.source == "openrouter" and args.concurrency > 1 and pending:
+        _generate_openrouter_concurrent(args, pending, anchors, row_by_ref, output)
+    else:
+        for idx, anchor in enumerate(anchors, start=1):
+            ref = str(anchor["refmark"])
+            if ref in row_by_ref:
+                continue
+            if args.source == "openrouter":
+                row = _openrouter_view_with_retries(args, anchor)
+            else:
+                row = _local_view(
+                    anchor,
+                    questions_by_ref,
+                    questions_per_anchor=args.questions_per_anchor,
+                    keyword_limit=args.keywords,
+                )
+            row_by_ref[ref] = row
+            _write_ordered(output, anchors, row_by_ref)
+            if args.sleep:
+                time.sleep(args.sleep)
+            print(f"{idx}/{len(anchors)} {ref} {args.source}")
+
+    _write_ordered(output, anchors, row_by_ref)
+    print(f"Wrote {len(row_by_ref)} retrieval views to {output}")
 
 
 def _load_existing(path: Path) -> dict[str, dict]:
@@ -76,9 +92,56 @@ def _load_existing(path: Path) -> dict[str, dict]:
     return {str(row["refmark"]): row for row in load_jsonl(path)}
 
 
-def _local_view(anchor: dict, train: list[dict], *, questions_per_anchor: int, keyword_limit: int) -> dict:
+def _questions_by_ref(train: list[dict]) -> dict[str, list[str]]:
+    output: dict[str, list[str]] = {}
+    for row in train:
+        output.setdefault(str(row["refmark"]), []).append(str(row["question"]))
+    return output
+
+
+def _select_anchors(anchors: list[dict], *, limit: int, mode: str, seed: int) -> list[dict]:
+    if limit <= 0 or limit >= len(anchors):
+        return anchors
+    if mode == "first":
+        return anchors[:limit]
+    if mode == "random":
+        rng = random.Random(seed)
+        indexes = sorted(rng.sample(range(len(anchors)), limit))
+        return [anchors[index] for index in indexes]
+    if limit == 1:
+        return [anchors[0]]
+    indexes = sorted({round(index * (len(anchors) - 1) / (limit - 1)) for index in range(limit)})
+    return [anchors[index] for index in indexes[:limit]]
+
+
+def _write_ordered(output: Path, anchors: list[dict], row_by_ref: dict[str, dict]) -> None:
+    rows = [row_by_ref[str(anchor["refmark"])] for anchor in anchors if str(anchor["refmark"]) in row_by_ref]
+    write_jsonl(output, rows)
+
+
+def _generate_openrouter_concurrent(
+    args,
+    pending: list[dict],
+    anchors: list[dict],
+    row_by_ref: dict[str, dict],
+    output: Path,
+) -> None:
+    refs_to_index = {str(anchor["refmark"]): idx for idx, anchor in enumerate(anchors, start=1)}
+    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        futures = {executor.submit(_openrouter_view_with_retries, args, anchor): anchor for anchor in pending}
+        for future in as_completed(futures):
+            anchor = futures[future]
+            ref = str(anchor["refmark"])
+            row_by_ref[ref] = future.result()
+            _write_ordered(output, anchors, row_by_ref)
+            if args.sleep:
+                time.sleep(args.sleep)
+            print(f"{refs_to_index[ref]}/{len(anchors)} {ref} {args.source}")
+
+
+def _local_view(anchor: dict, questions_by_ref: dict[str, list[str]], *, questions_per_anchor: int, keyword_limit: int) -> dict:
     ref = str(anchor["refmark"])
-    questions = [str(row["question"]) for row in train if str(row["refmark"]) == ref][:questions_per_anchor]
+    questions = questions_by_ref.get(ref, [])[:questions_per_anchor]
     text = str(anchor["text"])
     return {
         "refmark": ref,
@@ -141,6 +204,20 @@ Rules:
         "keywords": [str(item) for item in view.get("keywords", [])][: args.keywords],
         "generator": args.model,
     }
+
+
+def _openrouter_view_with_retries(args, anchor: dict) -> dict:
+    delay = max(args.sleep, 0.25)
+    for attempt in range(args.retries + 1):
+        try:
+            return _openrouter_view(args, anchor)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            if attempt >= args.retries:
+                raise
+            wait = delay * (2 ** attempt)
+            print(f"retry {attempt + 1}/{args.retries} {anchor['refmark']}: {exc}; sleeping {wait:.2f}s")
+            time.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def _stable_hash(text: str) -> str:

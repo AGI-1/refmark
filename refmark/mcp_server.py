@@ -15,9 +15,12 @@ from pydantic import BaseModel, Field
 from refmark.edit import (
     _apply_edits_to_lines,
     _detect_premarked,
+    _changed_regions_from_edits,
     _remove_rfm_header,
     _select_chunker,
     _select_marker_format,
+    _source_hash,
+    _unified_preview_diff,
     apply_ref_diff,
 )
 from refmark.regions import _parse_blocks_with_mode
@@ -84,6 +87,44 @@ def _append_call_log(payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
+def _log_full_payloads() -> bool:
+    return os.getenv("REFMARK_MCP_LOG_PAYLOADS", "").lower() in {"1", "true", "yes", "full"}
+
+
+def _summarize_edits(edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summarized: list[dict[str, Any]] = []
+    for edit in edits:
+        summarized.append(
+            {
+                key: value
+                for key, value in edit.items()
+                if key
+                in {
+                    "action",
+                    "region_id",
+                    "start_ref",
+                    "end_ref",
+                    "anchor_ref",
+                    "create_region",
+                    "patch_format",
+                }
+            }
+        )
+    return summarized
+
+
+def _check_allowed_path(path: Path) -> None:
+    raw_roots = os.getenv("REFMARK_MCP_ALLOWED_ROOTS", "").strip()
+    if not raw_roots:
+        return
+    resolved = path.resolve()
+    roots = [Path(root).expanduser().resolve() for root in raw_roots.split(os.pathsep) if root.strip()]
+    if not roots:
+        return
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise PermissionError(f"{resolved} is outside REFMARK_MCP_ALLOWED_ROOTS.")
+
+
 def _shadow_read_defaults() -> tuple[int, int]:
     max_chars = int(os.getenv("REFMARK_MCP_MAX_READ_CHARS", "12000"))
     max_lines = int(os.getenv("REFMARK_MCP_MAX_READ_LINES", "400"))
@@ -133,6 +174,7 @@ def _shadow_session_key(path: Path) -> str:
 
 
 def _get_view_state(path: Path) -> dict[str, Any]:
+    _check_allowed_path(path)
     source = path.read_text(encoding="utf-8")
     if not _supports_shadow_refmarks(path):
         return {
@@ -407,8 +449,7 @@ def list_ref_regions_tool(
         line_mode="marked",
     )
     regions: list[dict[str, Any]] = []
-    for region_id in sorted(blocks.keys()):
-        block = blocks[region_id]
+    for region_id, block in sorted(blocks.items(), key=lambda item: (int(item[1].get("ordinal", 0)), item[0])):
         line_start = int(block["line_start"])
         line_end = int(block["line_end"])
         line_count = max(0, line_end - line_start + 1)
@@ -448,23 +489,51 @@ def list_ref_regions_tool(
 def _apply_shadow_session_ref_diff(
     path: Path,
     edits: list[dict[str, Any]],
+    *,
+    dry_run: bool = False,
+    base_hash: str | None = None,
+    include_diff: bool = False,
 ) -> dict[str, Any]:
     view_state = _get_view_state(path)
+    source_text = path.read_text(encoding="utf-8")
+    source_hash = _source_hash(source_text)
+    if base_hash and base_hash != source_hash:
+        return {
+            "ok": False,
+            "file_path": str(path),
+            "applied_edits": 0,
+            "created_regions": [],
+            "changed_regions": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_seconds": 0.0,
+            "syntax_ok": False,
+            "dry_run": dry_run,
+            "source_hash": source_hash,
+            "output_hash": None,
+            "errors": ["Base hash mismatch; file changed since the caller inspected it."],
+            "namespace_mode": view_state.get("namespace_mode", "shadow"),
+            "shadow_persistent": bool(view_state.get("shadow_persistent", False)),
+        }
     if not view_state["supported"]:
         return {
             "ok": False,
             "file_path": str(path),
             "applied_edits": 0,
             "created_regions": [],
+            "changed_regions": [],
             "input_tokens": 0,
             "output_tokens": 0,
             "latency_seconds": 0.0,
             "syntax_ok": False,
+            "dry_run": dry_run,
+            "source_hash": source_hash,
+            "output_hash": None,
             "errors": [f"Persistent shadow mode is not supported for {path.suffix or 'this file type'}."],
         }
 
     if view_state["namespace_mode"] != "shadow":
-        return apply_ref_diff(path, edits, expect_live_markers=None)
+        return apply_ref_diff(path, edits, expect_live_markers=None, dry_run=dry_run, base_hash=base_hash, include_diff=include_diff)
 
     blocks = _parse_blocks_with_mode(
         view_state["view_text"],
@@ -489,7 +558,11 @@ def _apply_shadow_session_ref_diff(
     if not syntax_ok:
         apply_errors.append(f"Edited file is not syntactically valid for {path.suffix or 'this language'}.")
 
-    if not apply_errors:
+    output_hash = _source_hash(next_code)
+    changed_regions = _changed_regions_from_edits(edits, created_regions)
+    preview_diff = _unified_preview_diff(path, source_text, next_code) if include_diff else None
+
+    if not apply_errors and not dry_run:
         path.write_text(next_code, encoding="utf-8")
         _SHADOW_SESSIONS[_shadow_session_key(path)] = ShadowSessionEntry(
             clean_text=next_code,
@@ -502,12 +575,17 @@ def _apply_shadow_session_ref_diff(
     return {
         "ok": not apply_errors,
         "file_path": str(path),
-        "applied_edits": len([edit for edit in edits if isinstance(edit, dict)]),
+        "applied_edits": 0 if apply_errors else len([edit for edit in edits if isinstance(edit, dict)]),
         "created_regions": created_regions,
+        "changed_regions": changed_regions if not apply_errors else [],
         "input_tokens": 0,
         "output_tokens": 0,
         "latency_seconds": 0.0,
         "syntax_ok": syntax_ok,
+        "dry_run": dry_run,
+        "source_hash": source_hash,
+        "output_hash": output_hash if not apply_errors else None,
+        "diff": preview_diff,
         "errors": apply_errors,
         "namespace_mode": "shadow",
         "shadow_persistent": True,
@@ -532,6 +610,9 @@ def apply_ref_diff_tool(
     file_path: str,
     edits: list[RefmarkEdit | dict[str, Any] | str],
     expect_live_markers: bool | None = None,
+    dry_run: bool = False,
+    base_hash: str | None = None,
+    include_diff: bool = False,
 ) -> dict[str, Any]:
     serialized_edits = [_normalize_edit_payload(edit) for edit in edits]
     call_record: dict[str, Any] = {
@@ -539,21 +620,32 @@ def apply_ref_diff_tool(
         "tool": "apply_ref_diff",
         "file_path": str(Path(file_path)),
         "expect_live_markers": expect_live_markers,
-        "edits": serialized_edits,
+        "dry_run": dry_run,
+        "base_hash": base_hash,
+        "include_diff": include_diff,
+        "edits": serialized_edits if _log_full_payloads() else _summarize_edits(serialized_edits),
+        "payload_logging": "full" if _log_full_payloads() else "metadata",
     }
 
     try:
         path = Path(file_path)
+        _check_allowed_path(path)
         if expect_live_markers is True:
             result = apply_ref_diff(
                 path,
                 serialized_edits,
                 expect_live_markers=True,
+                dry_run=dry_run,
+                base_hash=base_hash,
+                include_diff=include_diff,
             )
         else:
             result = _apply_shadow_session_ref_diff(
                 path,
                 serialized_edits,
+                dry_run=dry_run,
+                base_hash=base_hash,
+                include_diff=include_diff,
             )
     except Exception as exc:
         call_record["ok"] = False
@@ -568,6 +660,8 @@ def apply_ref_diff_tool(
     call_record["syntax_ok"] = result.get("syntax_ok")
     call_record["changed_regions"] = result.get("changed_regions", [])
     call_record["created_regions"] = result.get("created_regions", [])
+    call_record["source_hash"] = result.get("source_hash")
+    call_record["output_hash"] = result.get("output_hash")
     call_record["errors"] = result.get("errors", [])
     _append_call_log(call_record)
     return result

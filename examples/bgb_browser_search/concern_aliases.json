@@ -1,0 +1,87 @@
+[
+  {
+    "id": "broken_phone_purchase",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_434", "bgb:S_437", "bgb:S_439", "bgb:S_474", "bgb:S_475b"],
+    "queries": [
+      "Ich habe ein Handy gekauft und es ist kaputt. Was kann ich tun?",
+      "Gekauftes Smartphone ist defekt, welche Rechte habe ich?",
+      "I bought a cellphone and found it is broken. What should I do?"
+    ],
+    "aliases": [
+      "kaputtes Handy",
+      "defektes Smartphone",
+      "gekauftes Telefon funktioniert nicht",
+      "broken cellphone after purchase",
+      "defective phone warranty repair replacement refund",
+      "Gewaehrleistung bei defekter Ware",
+      "Gewährleistung bei defekter Ware",
+      "Nacherfuellung Ersatzlieferung Reparatur Ruecktritt Minderung"
+    ],
+    "note": "Layperson consumer-goods defect concern; several adjacent sales-law articles are acceptable navigation targets."
+  },
+  {
+    "id": "rent_defect_mold",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_536", "bgb:S_536a", "bgb:S_536c"],
+    "queries": [
+      "In meiner Wohnung ist Schimmel, darf ich weniger Miete zahlen?",
+      "Mold in rented apartment, can I reduce rent?"
+    ],
+    "aliases": [
+      "Schimmel Wohnung Mietminderung",
+      "Mangel in Mietwohnung",
+      "rented apartment mold reduce rent",
+      "less rent because apartment has defects"
+    ],
+    "note": "Motivation-level rental defect question."
+  },
+  {
+    "id": "minor_online_contract",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_106", "bgb:S_107", "bgb:S_108", "bgb:S_110"],
+    "queries": [
+      "Mein Kind hat online etwas gekauft, ist der Vertrag gültig?",
+      "Can a minor make an online purchase without parents?"
+    ],
+    "aliases": [
+      "Kind online gekauft Vertrag Eltern",
+      "Minderjaehrige Zustimmung Vertrag Taschengeld",
+      "minor online purchase parents approval",
+      "child contract without consent"
+    ],
+    "note": "Everyday formulation of capacity and parental consent rules."
+  },
+  {
+    "id": "cancel_online_order",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_312g", "bgb:S_355", "bgb:S_356"],
+    "queries": [
+      "Ich habe online bestellt und möchte zurücktreten, welche Frist gilt?",
+      "How long can I cancel an online order?"
+    ],
+    "aliases": [
+      "Online Bestellung widerrufen Frist",
+      "Internetkauf Rueckgabe Widerrufsrecht",
+      "cancel online order return period",
+      "distance contract withdrawal deadline"
+    ],
+    "note": "Consumer withdrawal concern spanning contract type and withdrawal rules."
+  },
+  {
+    "id": "inheritance_refuse_debt",
+    "category": "expected",
+    "expected_prefixes": ["bgb:S_1942", "bgb:S_1943", "bgb:S_1944"],
+    "queries": [
+      "Ich habe Schulden geerbt, kann ich die Erbschaft ablehnen?",
+      "Can I refuse an inheritance if it has debt?"
+    ],
+    "aliases": [
+      "Erbe Schulden ablehnen",
+      "Erbschaft ausschlagen Frist Nachlass",
+      "refuse inheritance debt deadline",
+      "disclaim inheritance because estate has debts"
+    ],
+    "note": "Motivation-level inheritance disclaimer concern."
+  }
+]

@@ -97,13 +97,29 @@ def build_region_manifest(
     )
     blocks = _parse_blocks_with_mode(marked, marker_format, line_mode="marked")
     ordered = sorted(blocks.items(), key=lambda item: int(item[1]["ordinal"]))
-    records: list[RegionRecord] = []
-    for index, (region_id, block) in enumerate(ordered):
-        prev_region_id = ordered[index - 1][0] if index > 0 else None
-        next_region_id = ordered[index + 1][0] if index + 1 < len(ordered) else None
+    pending: list[tuple[str, dict]] = []
+    for region_id, block in ordered:
         text = str(block.get("text", ""))
         if min_words and len(_token_set(text)) < min_words:
             continue
+        pending.append((region_id, block))
+
+    records: list[RegionRecord] = []
+    current_heading_by_level: dict[int, str] = {}
+    supports_headings = file_ext.lower() in {".md", ".markdown", ".rst", ".txt"}
+    for index, (region_id, block) in enumerate(pending):
+        prev_region_id = pending[index - 1][0] if index > 0 else None
+        next_region_id = pending[index + 1][0] if index + 1 < len(pending) else None
+        text = str(block.get("text", ""))
+        parent_region_id = None
+        heading_level = _heading_level(text) if supports_headings else None
+        if heading_level is not None:
+            for stale_level in [level for level in current_heading_by_level if level >= heading_level]:
+                del current_heading_by_level[stale_level]
+            parent_region_id = current_heading_by_level.get(max(current_heading_by_level) if current_heading_by_level else -1)
+            current_heading_by_level[heading_level] = region_id
+        else:
+            parent_region_id = current_heading_by_level.get(max(current_heading_by_level) if current_heading_by_level else -1)
         records.append(
             RegionRecord(
                 doc_id=doc_id,
@@ -116,6 +132,7 @@ def build_region_manifest(
                 source_path=source_path,
                 prev_region_id=prev_region_id,
                 next_region_id=next_region_id,
+                parent_region_id=parent_region_id,
             )
         )
     return marked, records
@@ -159,8 +176,10 @@ def expand_region_context(
     doc_id: str | None = None,
     before: int = 0,
     after: int = 0,
+    same_parent: bool = False,
+    include_parent: bool = False,
 ) -> list[RegionRecord]:
-    """Return cited regions plus adjacent context regions from the same document."""
+    """Return cited regions plus adjacent or same-parent context regions."""
     scoped = [record for record in records if doc_id is None or record.doc_id == doc_id]
     by_doc: dict[str, list[RegionRecord]] = {}
     for record in scoped:
@@ -173,6 +192,17 @@ def expand_region_context(
     for current_doc_id, doc_records in by_doc.items():
         address_space = [record.region_id for record in doc_records]
         wanted = set(expand_refs(refs, address_space=address_space))
+        if same_parent:
+            parent_ids = {
+                record.parent_region_id
+                for record in doc_records
+                if record.region_id in wanted and record.parent_region_id
+            }
+            for record in doc_records:
+                if record.parent_region_id in parent_ids:
+                    wanted.add(record.region_id)
+                if include_parent and record.region_id in parent_ids:
+                    wanted.add(record.region_id)
         for index, record in enumerate(doc_records):
             if record.region_id not in wanted:
                 continue
@@ -288,6 +318,7 @@ def render_coverage_report_html(
     *,
     title: str = "Refmark Coverage Review",
     layout: str = "side-by-side",
+    include_expanded_evidence: bool = True,
 ) -> str:
     """Render a coverage report as stacked cards or side-by-side review rows."""
     item_list = list(items)
@@ -305,13 +336,14 @@ def render_coverage_report_html(
                 "</div>"
             )
         expanded_cards = []
-        for target in item.expanded_targets:
-            expanded_cards.append(
-                "<div class='expanded'>"
-                f"<div class='ref'>{html.escape(target.doc_id)}:{html.escape(target.region_id)}</div>"
-                f"<pre>{html.escape(target.text)}</pre>"
-                "</div>"
-            )
+        if include_expanded_evidence:
+            for target in item.expanded_targets:
+                expanded_cards.append(
+                    "<div class='expanded'>"
+                    f"<div class='ref'>{html.escape(target.doc_id)}:{html.escape(target.region_id)}</div>"
+                    f"<pre>{html.escape(target.text)}</pre>"
+                    "</div>"
+                )
         details = (
             f"<p>naive: <strong>{item.naive_score:.4f}</strong> | expanded: <strong>{item.expanded_score:.4f}</strong> | "
             f"coverage: <strong>{item.coverage_score:.4f}</strong></p>"
@@ -328,8 +360,7 @@ def render_coverage_report_html(
                 f"<pre>{html.escape(item.source.text)}</pre>"
                 + details
                 + "</div><div class='right'>"
-                "<h3>Expanded Evidence</h3>"
-                + "".join(expanded_cards)
+                + ("<h3>Expanded Evidence</h3>" + "".join(expanded_cards) if include_expanded_evidence else "")
                 + "<h3>Top Candidates</h3>"
                 + "".join(candidate_cards)
                 + "</div></section>"
@@ -341,8 +372,7 @@ def render_coverage_report_html(
                 f"<h2>{html.escape(item.source.doc_id)}:{html.escape(item.source.region_id)}</h2>"
                 f"<pre>{html.escape(item.source.text)}</pre>"
                 + details
-                + "<h3>Expanded Evidence</h3>"
-                + "".join(expanded_cards)
+                + ("<h3>Expanded Evidence</h3>" + "".join(expanded_cards) if include_expanded_evidence else "")
                 + "<h3>Top Candidates</h3>"
                 + "".join(candidate_cards)
                 + "</section>"
@@ -396,6 +426,16 @@ def summarize_coverage(items: Iterable[CoverageItem]) -> dict[str, float | int |
 def _stable_text_hash(text: str) -> str:
     normalized = " ".join(text.split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _heading_level(text: str) -> int | None:
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    markdown = re.match(r"^(#{1,6})\s+\S", first_line)
+    if markdown:
+        return len(markdown.group(1))
+    if first_line and set(first_line) <= {"=", "-"}:
+        return None
+    return None
 
 
 def _token_set(text: str) -> set[str]:

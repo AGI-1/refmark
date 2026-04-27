@@ -7,6 +7,8 @@ current implementation.
 
 ## Current Core Surfaces
 
+- `refmark.rag_eval`: evaluate `query -> gold refs/ranges` examples against
+  arbitrary retriever callbacks and detect stale examples after corpus changes.
 - `enrich-prompt`: wrap a document so general chat models can answer with
   concrete region and range citations.
 - `map`: create JSONL manifests of addressable document regions.
@@ -62,29 +64,87 @@ current implementation.
   - `table`
   - `audit`
   - `json`
-- Add an answer parser that extracts `[P01]`, `[P01-P03]`, and `[P01,P04]`.
-- Add a deterministic evaluation helper:
+- [done] Add an answer parser that extracts `[P01]`, `[P01-P03]`, and `[P01,P04]`.
+- [done] Add a deterministic evaluation helper:
   - compare model-cited refs to expected refs
   - emit overcite / undercite / wrong-location data smells
 
 ## Priority 4: RAG Enhancement
 
-- Treat Refmark as metadata, not just injected text.
+- [done] Treat Refmark as metadata, not just injected text.
   - Store `doc_id`, `region_id`, `hash`, `prev_region_id`, `next_region_id`.
-  - Add optional `parent_region_id` when section/chapter hierarchy exists.
+  - `parent_region_id` is present in the manifest schema but not yet populated
+    by section/chapter hierarchy.
+- [done] Add a first-pass eval-suite API.
+  - `CorpusMap`
+  - `EvalExample`
+  - `EvalSuite.evaluate(...)`
+  - `EvalSuite.compare(...)`
+  - stale-example detection via stored source hashes
 - Add `expand_policy` helpers:
-  - fixed neighbors: before/after
-  - same heading parent
+  - [done] fixed neighbors: before/after
+  - [done] same heading parent for Markdown-style heading regions
   - until token budget
   - stop at heading boundary
 - Add a `context_pack` function:
+  - [done] `CorpusMap.context_pack(...)`
+  - [done] CLI `pack-context`
   - input: retrieved region ids
   - output: ordered text bundle with stable refs
 - Add a small benchmark example:
+  - [done] CLI `eval-index` evaluates portable search indexes against JSONL
+    `query -> gold_refs` suites.
   - retrieval hit only
   - hit plus neighbor expansion
   - hit plus parent expansion
   - measure gold-support coverage and token cost
+- [done] Document the large evidence-retrieval pipeline.
+  - `docs/EVIDENCE_RETRIEVAL_PIPELINE.md`
+  - covers structured Markdown corpus preparation above 200k tokens
+  - separates single-region, contiguous-range, and distributed-ref targets
+  - reports BM25, generated/local views, reranking, embeddings, hybrid search,
+    and trained-resolver evidence where available
+  - frames the output as CI evidence, not as a one-off demo score
+
+## Priority 4A: Evidence Retrieval CI
+
+- [partial] Add discovery stage.
+  - CLI: `refmark discover manifest.jsonl -o corpus.discovery.json`
+  - local deterministic source implemented for tests and smoke runs
+  - OpenRouter source implemented for whole-corpus model-backed discovery with
+    local fallback
+  - hierarchical/windowed discovery still needs real merge/reconcile passes
+- Add first-class `gold_mode` summaries to `EvalSuite` and `eval-index`.
+  - `single`
+  - `range`
+  - `distributed`
+  - `parent` / `section`
+- [partial] Add first-class `gold_mode` summaries to the portable real-corpus
+  evaluator.
+  - reports `by_gold_mode`
+  - still needs the same shape in library `EvalSuite` and CLI `eval-index`
+- Add CI thresholds:
+  - maximum stale examples
+  - minimum hit@k / MRR
+  - minimum gold coverage
+  - maximum overcitation breadth
+  - maximum undercitation rate
+- Add a cached question-generation runner.
+  - Input: manifest + refs/ranges + prompt template
+  - Output: JSONL eval rows with source hashes and target-shape metadata
+  - Cache key: ref/range, source hashes, provider, model, prompt version
+- Add a compact run manifest for reproducibility.
+  - corpus manifest hash
+  - eval suite hash
+  - search index hash
+  - generated-view cache hash
+  - model/provider settings
+- Add per-method failure exports.
+  - misses
+  - partial-range hits
+  - wrong-neighbor hits
+  - overbroad but supported results
+  - distributed-ref partial coverage
 
 ## Priority 5: Review / HiL Coverage Pipelines
 
@@ -108,6 +168,8 @@ current implementation.
 
 - Current DOCX extraction is plain OOXML paragraph extraction.
 - Current PDF extraction uses `pypdf`.
+- [done] Document current provenance boundary: PDF/DOCX refs resolve to
+  extracted text regions, not original-layout page boxes.
 - Improve DOCX:
   - tables
   - headers/footers
@@ -136,6 +198,10 @@ current implementation.
   - unmarked prompt
   - marked prompt
   - marked prompt with citation format examples
+- [done] Add model-agnostic question-generation prompt builder.
+  - CLI `question-prompt`
+  - overridable template
+  - emits prompts for any external LLM endpoint or manual curation
 - For coding agents, test:
   - baseline patch
   - live marked file

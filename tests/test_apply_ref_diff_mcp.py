@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,6 +32,21 @@ def _make_marked_typescript_file(tmp_path: Path) -> Path:
         chunker="ts_hybrid",
     )
     path = tmp_path / "user_service.ts"
+    path.write_text(marked, encoding="utf-8")
+    return path
+
+
+def _make_marked_python_file(tmp_path: Path) -> Path:
+    source = """def greet(name: str) -> str:
+    return f"Hello {name}"
+"""
+    marked, _ = inject(
+        source,
+        ".py",
+        marker_format="typed_comment_py",
+        chunker="hybrid",
+    )
+    path = tmp_path / "greet.py"
     path.write_text(marked, encoding="utf-8")
     return path
 
@@ -169,6 +185,57 @@ def test_apply_ref_diff_tool_accepts_stringified_json_edit(tmp_path: Path):
     assert "toUpperCase" in content
 
 
+def test_apply_ref_diff_dry_run_reports_diff_without_writing(tmp_path: Path):
+    path = _make_marked_typescript_file(tmp_path)
+    before = path.read_text(encoding="utf-8")
+
+    result = apply_ref_diff(
+        path,
+        [
+            {
+                "region_id": "M02",
+                "action": "replace",
+                "new_content": "  format(name: string): string {\n    return name.trim().toUpperCase();\n  }\n",
+            }
+        ],
+        expect_live_markers=True,
+        dry_run=True,
+        include_diff=True,
+    )
+
+    assert result["ok"]
+    assert result["dry_run"] is True
+    assert result["changed_regions"] == ["M02"]
+    assert "toUpperCase" in result["diff"]
+    assert result["source_hash"] == hashlib.sha256(before.encode("utf-8")).hexdigest()
+    assert result["output_hash"] != result["source_hash"]
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_apply_ref_diff_rejects_base_hash_mismatch(tmp_path: Path):
+    path = _make_marked_typescript_file(tmp_path)
+    before = path.read_text(encoding="utf-8")
+
+    result = apply_ref_diff(
+        path,
+        [
+            {
+                "region_id": "M02",
+                "action": "replace",
+                "new_content": "  format(name: string): string {\n    return name.trim().toUpperCase();\n  }\n",
+            }
+        ],
+        expect_live_markers=True,
+        base_hash="not-the-current-hash",
+    )
+
+    assert result["ok"] is False
+    assert result["applied_edits"] == 0
+    assert result["output_hash"] is None
+    assert any("Base hash mismatch" in error for error in result["errors"])
+    assert path.read_text(encoding="utf-8") == before
+
+
 def test_apply_ref_diff_insert_before_ref_creates_live_region(tmp_path: Path):
     path = _make_marked_typescript_file(tmp_path)
 
@@ -288,6 +355,58 @@ def test_apply_ref_diff_patch_within_infers_line_edits_format(tmp_path: Path):
     assert "toLowerCase" in path.read_text(encoding="utf-8")
 
 
+def test_apply_ref_diff_tolerates_anchor_ref_for_non_insert_region_edits(tmp_path: Path):
+    path = _make_marked_typescript_file(tmp_path)
+
+    result = apply_ref_diff(
+        path,
+        [
+            {
+                "anchor_ref": "M02",
+                "action": "patch_within",
+                "patch_format": "line_edits",
+                "patch": {
+                    "edits": [
+                        {
+                            "start_line": 2,
+                            "end_line": 2,
+                            "expected_text": "    return name.trim();\n",
+                            "new_content": "    return name.trim().toUpperCase();\n",
+                        }
+                    ]
+                },
+            }
+        ],
+        expect_live_markers=True,
+    )
+
+    assert result["ok"]
+    assert "toUpperCase" in path.read_text(encoding="utf-8")
+
+
+def test_apply_ref_diff_search_replace_accepts_single_search_replace_object(tmp_path: Path):
+    path = _make_marked_typescript_file(tmp_path)
+
+    result = apply_ref_diff(
+        path,
+        [
+            {
+                "region_id": "M02",
+                "action": "patch_within",
+                "patch_format": "search_replace",
+                "patch": {
+                    "search": "name.trim()",
+                    "replace": "name.trim().toLowerCase()",
+                },
+            }
+        ],
+        expect_live_markers=True,
+    )
+
+    assert result["ok"]
+    assert "toLowerCase" in path.read_text(encoding="utf-8")
+
+
 def test_apply_ref_diff_patch_within_tolerates_duplicate_same_anchor(tmp_path: Path):
     path = _make_marked_typescript_file(tmp_path)
 
@@ -345,6 +464,35 @@ def test_apply_ref_diff_patch_within_accepts_literal_escaped_newline_expected_te
 
     assert result["ok"]
     assert "toLowerCase" in path.read_text(encoding="utf-8")
+
+
+def test_apply_ref_diff_patch_within_accepts_escaped_quote_expected_text(tmp_path: Path):
+    path = _make_marked_python_file(tmp_path)
+
+    result = apply_ref_diff(
+        path,
+        [
+            {
+                "region_id": "F01",
+                "action": "patch_within",
+                "patch_format": "line_edits",
+                "patch": {
+                    "edits": [
+                        {
+                            "start_line": 2,
+                            "end_line": 2,
+                            "expected_text": '    return f\\"Hello {name}\\"',
+                            "new_content": '    return f"Hi {name}"\n',
+                        }
+                    ]
+                },
+            }
+        ],
+        expect_live_markers=True,
+    )
+
+    assert result["ok"]
+    assert "Hi" in path.read_text(encoding="utf-8")
 
 
 def test_apply_ref_diff_patch_within_line_edits_rejects_expected_text_mismatch(tmp_path: Path):
@@ -538,6 +686,112 @@ def describe_marker() -> str:
     assert listed["regions"]
     assert read["namespace_mode"] == "shadow"
     assert read["marker_count"] >= 1
+
+
+def test_list_ref_regions_orders_by_marker_ordinal_not_string_sort(tmp_path: Path):
+    lines = []
+    for index in range(12):
+        lines.append(f"def fn_{index}() -> int:\n    return {index}\n")
+    source = "\n".join(lines)
+    marked, _ = inject(source, ".py", marker_format="typed_comment_py", chunker="hybrid")
+    path = tmp_path / "many.py"
+    path.write_text(marked, encoding="utf-8")
+
+    listed = list_ref_regions_tool(str(path))
+
+    ids = [region["region_id"] for region in listed["regions"]]
+    assert ids[:12] == [f"F{index:02d}" for index in range(1, 13)]
+
+
+def test_apply_ref_diff_tool_logs_metadata_by_default(tmp_path: Path, monkeypatch):
+    path = _make_marked_typescript_file(tmp_path)
+    log_path = tmp_path / "mcp.jsonl"
+    monkeypatch.setenv("REFMARK_MCP_LOG_PATH", str(log_path))
+    monkeypatch.delenv("REFMARK_MCP_LOG_PAYLOADS", raising=False)
+
+    result = apply_ref_diff_tool(
+        str(path),
+        [
+            {
+                "region_id": "M02",
+                "action": "replace",
+                "new_content": "  format(name: string): string {\n    return name.trim().toUpperCase();\n  }\n",
+            }
+        ],
+        expect_live_markers=True,
+    )
+
+    assert result["ok"] is True
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["payload_logging"] == "metadata"
+    assert record["edits"][0] == {"region_id": "M02", "action": "replace"}
+    assert "new_content" not in record["edits"][0]
+
+
+def test_apply_ref_diff_tool_shadow_dry_run_does_not_write(tmp_path: Path):
+    path = tmp_path / "plain.py"
+    path.write_text("def greet(name: str) -> str:\n    return name.strip()\n", encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+
+    regions = list_ref_regions_tool(str(path))
+    region_id = regions["regions"][0]["region_id"]
+    result = apply_ref_diff_tool(
+        str(path),
+        [
+            {
+                "region_id": region_id,
+                "action": "replace",
+                "new_content": "def greet(name: str) -> str:\n    return name.strip().title()\n",
+            }
+        ],
+        dry_run=True,
+        include_diff=True,
+    )
+
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["namespace_mode"] == "shadow"
+    assert result["changed_regions"] == [region_id]
+    assert "title()" in result["diff"]
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_apply_ref_diff_tool_shadow_rejects_base_hash_mismatch(tmp_path: Path):
+    path = tmp_path / "plain.py"
+    path.write_text("def greet(name: str) -> str:\n    return name.strip()\n", encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+
+    regions = list_ref_regions_tool(str(path))
+    region_id = regions["regions"][0]["region_id"]
+    result = apply_ref_diff_tool(
+        str(path),
+        [
+            {
+                "region_id": region_id,
+                "action": "replace",
+                "new_content": "def greet(name: str) -> str:\n    return name.strip().title()\n",
+            }
+        ],
+        base_hash="wrong",
+    )
+
+    assert result["ok"] is False
+    assert result["changed_regions"] == []
+    assert any("Base hash mismatch" in error for error in result["errors"])
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_mcp_tools_reject_paths_outside_allowed_roots(tmp_path: Path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    path = outside / "plain.py"
+    path.write_text("def fn() -> int:\n    return 1\n", encoding="utf-8")
+    monkeypatch.setenv("REFMARK_MCP_ALLOWED_ROOTS", str(allowed))
+
+    with pytest.raises(PermissionError):
+        list_ref_regions_tool(str(path))
 
 
 def test_read_refmarked_file_and_list_regions_use_live_namespace_for_marked_file(tmp_path: Path):

@@ -13,6 +13,7 @@ python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
+python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
 python examples/rag_retrieval_benchmark/run.py
 ```
 
@@ -76,6 +77,40 @@ runs two review flows:
 The example writes marked text, region manifests, naive and expanded coverage
 JSON, and an HTML review page that highlights covered items and gaps by stable
 Refmark regions.
+
+## Portable Search Index
+
+`portable_search_index` demonstrates the product-shaped retrieval flow:
+
+1. map a folder of docs into Refmark regions
+2. enrich each region with local or OpenRouter-generated retrieval metadata
+3. write a single portable JSON index
+4. search locally with BM25 and return stable region ids plus optional neighbor context
+
+This is the "corpus plus cheap LLM becomes searchable corpus" path. The build
+step can use a cheap model once; query-time search needs no API, embeddings,
+GPU, vector database, or server.
+
+## Browser Page Search
+
+`browser_page_search` demonstrates the smallest browser-facing use case:
+semantic find inside the current page. A tiny BM25 payload plus
+`refmark/browser_search.js` can power an in-page query box that jumps to
+elements with matching `data-refmark-ref` anchors.
+
+## BGB Browser Search
+
+`bgb_browser_search` builds a larger offline demo from the official
+Gesetze-im-Internet BGB HTML page. It turns the German Civil Code into a static
+browser search app with stable paragraph-level anchors, jump/highlight behavior,
+and a small break suite for expected, ambiguous, and out-of-domain queries.
+
+## Static Search Benchmark
+
+`static_search_benchmark` compares Refmark browser BM25 with common static
+browser search engines such as MiniSearch, Lunr, and FlexSearch using the same
+Refmark-labeled question cache. It reports localization quality together with
+latency, index size, licensing, and deployment requirements.
 
 ## RAG Retrieval Benchmark
 

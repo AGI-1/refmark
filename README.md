@@ -2,19 +2,25 @@
 
 # [refmark]
 
-Stable addressable space for AI models. Cheaper evaluation, resolvable
-hallucination-resistant citations, and MCP tools for stable multi-diff file
-edits.
+Turn your corpus into a regression test suite for retrieval.
 
-Refmark makes documents and code addressable to AI systems. It injects stable,
-resolvable anchors into source text so models can point at regions by id
-instead of by fragile prose, copied snippets, or drifting line numbers.
+Refmark turns documents and code into stable, addressable evidence regions.
+Once a corpus has refs like `policy:P13`, any retriever, reranker, embedder,
+query rewriter, context-expansion policy, or small trained resolver can be
+evaluated by the same concrete question:
+
+> Did it recover the correct source region or range?
+
+That makes RAG evaluation feel more like CI than one-off answer judging. When
+the corpus changes, Refmark can identify which refs changed or disappeared so
+only affected evaluation and training examples need review.
 
 ## 30-Second Mental Model
 
-Given a document with injected anchors, a model predicts which anchors or
-anchor ranges answer a question. Refmark resolves those ids back to source text
-and scores the citation deterministically, without comparing generated prose.
+Given a document with addressable regions, a pipeline predicts which refs or
+ref ranges answer a question. Refmark resolves those ids back to source text
+and scores evidence recovery deterministically, before you judge generated
+prose.
 
 ```text
 Document:
@@ -24,14 +30,36 @@ Document:
 Question:
 Which clause says expedited shipping is non-refundable?
 
-Model output:
+Pipeline output:
 ["P13"]
 
 Refmark resolves:
 P13 -> "Expedited shipping is non-refundable."
 
 Result:
-exact citation match
+exact evidence match
+```
+
+The same gold example can compare multiple retrieval stacks:
+
+```text
+Gold:
+  query: "Which clause says expedited shipping is non-refundable?"
+  gold_refs: ["policy:P13"]
+
+Pipeline A:
+  top-5 refs = ["policy:P02", "policy:P09", "policy:P13"]
+  hit@1 = false
+  hit@5 = true
+
+Pipeline B:
+  top-5 refs = ["policy:P13", "policy:P14", "policy:P12"]
+  hit@1 = true
+  gold_coverage = 1.0
+
+After corpus update:
+  policy:P13 changed
+  eval examples depending on policy:P13 are marked stale
 ```
 
 ```mermaid
@@ -39,26 +67,38 @@ flowchart LR
   A["Document or code"] --> B["Inject anchors"]
   B --> C["Model predicts refs"]
   C --> D["Resolve regions"]
-  D --> E["Highlight, score, expand, or edit"]
+  D --> E["Score, expand, highlight, edit, or mark stale"]
 ```
 
 ## Use Refmark For
 
+- **Corpus CI for RAG:** keep `query -> gold refs/ranges` examples and compare
+  arbitrary retrieval stacks by hit@k, coverage, precision, context cost, and
+  stale-ref status.
+- **Retriever/reranker/embedder evaluation:** plug in BM25, embeddings, hybrid
+  search, rerankers, query rewriting, or vector DB results and score all of
+  them against the same evidence refs.
 - **Citation evaluation:** ask a model for refs, then score exact hits,
   overlap, overcitation, undercitation, and wrong-location errors without an
   LLM judge.
 - **RAG and review pipelines:** map documents into addressable regions, keep
   refs as metadata, and expand retrieved hits to neighboring context.
+- **Existing chunked RAG:** keep your current chunker and retriever, but attach
+  stable ref ids so retrieved chunks become testable evidence with clearer
+  churn control and anomaly checks.
+- **Portable documentation search:** turn a folder of docs into Refmark regions,
+  enrich each region once with cheap LLM retrieval views, and ship a small
+  local BM25 JSON index that needs no runtime model.
 - **Human-in-the-loop audits:** render highlighted source regions so reviewers
   inspect what a model actually cited.
 - **Bounded code edits:** target stable same-file regions instead of line
   numbers when applying multi-region model patches.
 
-This does not guarantee that a model cites the right region. It guarantees a
-different and useful thing: cited regions exist, resolve back to source text,
-and can be audited. For review workflows, an irrelevant citation and a
-fabricated citation are not the same failure. One is inspectable; the other is
-not.
+This does not guarantee that a model or retriever picked the right region. It
+guarantees a different and useful thing: refs exist, resolve back to source
+text, and can be audited and regression-tested. For review workflows, an
+irrelevant citation and a fabricated citation are not the same failure.
+Irrelevance is way easier to spot in review.
 
 Once a corpus has addresses, citation behavior becomes structured data:
 exact hits, overlap, overcitation, undercitation, wrong-region hits, and
@@ -75,13 +115,15 @@ through `apply_ref_diff`.
 
 This publish layout keeps the stable surface explicit:
 
-1. deterministic locate-only QA and citation evaluation with data-smell metrics
-2. highlighted review of cited regions for human-in-the-loop audit workflows
-3. stable same-file multi-region editing for Python and TypeScript through `apply_ref_diff`
-4. lightweight pipeline helpers for paste-ready cited prompts, region manifests,
+1. corpus/test-suite helpers for `query -> gold refs/ranges` evaluation
+2. deterministic locate-only QA and citation evaluation with data-smell metrics
+3. highlighted review of cited regions for human-in-the-loop audit workflows
+4. stable same-file multi-region editing for Python and TypeScript through `apply_ref_diff`
+5. lightweight pipeline helpers for paste-ready cited prompts, region manifests,
    context expansion, and document-to-document region mapping
-5. exploratory corpus-local anchor prediction with retained derived datasets
-6. small deterministic smoke checks that prove the public artifact works locally
+6. portable search-index helpers for corpus-in, searchable-region-index-out workflows
+7. exploratory corpus-local anchor prediction with retained derived datasets
+8. small deterministic smoke checks that prove the public artifact works locally
 
 ## Included Here
 
@@ -122,6 +164,8 @@ python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
+python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
+python -m refmark.cli export-browser-index examples/portable_search_index/output/index_local.json -o examples/portable_search_index/output/index_browser.json
 pytest
 ```
 
@@ -146,6 +190,63 @@ python -m refmark.cli expand .refmark/policy_manifest.jsonl --refs P03 --before 
 python -m refmark.cli align old_policy.docx new_policy.pdf --top-k 2 --coverage-html coverage_review.html
 ```
 
+Citation ranges and edit ranges intentionally differ. Citation ranges such as
+`policy:P03-P05` are inclusive evidence ranges; `apply_ref_diff` boundary
+ranges stop before `end_ref`. See [Range And Citation Semantics](docs/RANGE_AND_CITATION_SEMANTICS.md).
+
+To evaluate an existing retriever against stable evidence refs:
+
+```python
+from refmark import CorpusMap, EvalExample, EvalSuite
+
+corpus = CorpusMap.from_manifest(".refmark/policy_manifest.jsonl")
+suite = EvalSuite(
+    corpus=corpus,
+    examples=[
+        EvalExample(
+            query="Which clause says expedited shipping is non-refundable?",
+            gold_refs=["policy:P13"],
+        ).with_source_hashes(corpus)
+    ],
+)
+
+def my_retriever(query: str):
+    # Return stable refs, dicts, SearchHit-like objects, or hits with context_refs.
+    return ["policy:P09", {"stable_ref": "policy:P13", "context_refs": ["policy:P12", "policy:P13"]}]
+
+run = suite.evaluate(my_retriever, k=5)
+print(run.metrics)
+print([item.to_dict() for item in suite.stale_examples()])
+```
+
+To build a tiny searchable documentation index:
+
+```bash
+python -m refmark.cli build-index docs -o docs.refmark-index.json --source openrouter --model mistralai/mistral-nemo
+python -m refmark.cli search-index docs.refmark-index.json "How do I configure retention?" --expand-after 1
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --top-k 10 \
+  --provenance-out runs/docs_eval.provenance.json \
+  -o runs/docs_eval.json
+python -m refmark.cli export-browser-index docs.refmark-index.json -o docs.refmark-browser.json
+```
+
+The build step can spend cheap LLM tokens once to create summaries, likely user
+questions, and keywords per region. The search step is local BM25 over the JSON
+index, so it can be embedded into documentation tooling without a vector
+database or runtime model.
+
+The eval step makes the artifact self-checking: reports include input hashes,
+retrieval settings hashes, stale-ref validation, hard-ref/confusion heatmaps,
+and score-margin confidence gates. That is the core evidence pipeline: compare
+retrieval variants by whether they recover the right refs/ranges, then adapt
+the hard zones instead of guessing from answer prose.
+
+For a browser-only page search, load `refmark/browser_search.js` and the
+exported browser index. Elements with `data-refmark-ref="doc:P03"` can be
+scrolled and highlighted directly from query results, giving a semantic
+`Ctrl+F`-style experience inside a page.
+
 The document workflow can also be driven from Python:
 
 ```python
@@ -161,6 +262,9 @@ report = align_documents(
 report.write_html("coverage_review.html", layout="side-by-side")
 print(report.summary)
 ```
+
+DOCX/PDF support currently resolves refs to extracted text regions, not
+original-layout page boxes. See [Document Extraction And Provenance](docs/DOCUMENT_PROVENANCE.md).
 
 For an existing RAG or review system, use `Refmarker` as a pass-through
 addressability layer. Shadow mode keeps your source unchanged and stores the

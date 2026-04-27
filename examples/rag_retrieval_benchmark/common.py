@@ -38,6 +38,10 @@ class BM25Index:
         doc_freq: Counter[str] = Counter()
         for counts in self.unit_counts:
             doc_freq.update(counts.keys())
+        self.postings: dict[str, list[int]] = defaultdict(list)
+        for index, counts in enumerate(self.unit_counts):
+            for token in counts:
+                self.postings[token].append(index)
         count = max(len(units), 1)
         self.idf = {
             token: math.log(((count - freq + 0.5) / (freq + 0.5)) + 1.0)
@@ -46,8 +50,16 @@ class BM25Index:
 
     def search(self, query: str, *, top_k: int) -> list[tuple[RetrievalUnit, float]]:
         query_terms = set(tokenize(query))
+        candidate_indices = {
+            index
+            for token in query_terms
+            for index in self.postings.get(token, [])
+        }
         scored: list[tuple[RetrievalUnit, float]] = []
-        for unit, counts, length in zip(self.units, self.unit_counts, self.unit_lengths, strict=True):
+        for index in candidate_indices:
+            unit = self.units[index]
+            counts = self.unit_counts[index]
+            length = self.unit_lengths[index]
             score = 0.0
             for token in query_terms:
                 tf = counts.get(token, 0)

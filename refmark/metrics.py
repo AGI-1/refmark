@@ -6,6 +6,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
+from refmark.citations import parse_citation_refs
+
 
 REF_RE = re.compile(r"([A-Za-z]+)(\d+)")
 
@@ -59,14 +61,10 @@ def expand_refs(refs: Iterable[str], address_space: Iterable[str] | None = None)
     index = {ref: idx for idx, ref in enumerate(ordered)}
     expanded: list[str] = []
 
-    for raw in refs:
-        token = str(raw).strip()
-        if not token:
-            continue
-        match = re.fullmatch(r"([A-Za-z]+\d+)\s*(?:-|\.\.)\s*([A-Za-z]+\d+)", token)
-        if match:
-            start = normalize_ref(match.group(1))
-            end = normalize_ref(match.group(2))
+    for citation in parse_citation_refs(refs):
+        if citation.is_range:
+            start = normalize_ref(citation.ref)
+            end = normalize_ref(citation.end_ref or "")
             if start in index and end in index:
                 lo = min(index[start], index[end])
                 hi = max(index[start], index[end])
@@ -74,7 +72,7 @@ def expand_refs(refs: Iterable[str], address_space: Iterable[str] | None = None)
                 continue
             expanded.extend(_expand_numeric_range(start, end))
             continue
-        expanded.append(normalize_ref(token))
+        expanded.append(normalize_ref(citation.ref))
 
     return _dedupe(expanded)
 

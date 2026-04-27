@@ -78,9 +78,14 @@ class AlignmentReport:
     def write_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
-    def write_html(self, path: str | Path, *, layout: str = "side-by-side") -> None:
+    def write_html(self, path: str | Path, *, layout: str = "side-by-side", include_expanded_evidence: bool = True) -> None:
         Path(path).write_text(
-            render_coverage_report_html(self.coverage, title="Refmark Coverage Review", layout=layout),
+            render_coverage_report_html(
+                self.coverage,
+                title="Refmark Coverage Review",
+                layout=layout,
+                include_expanded_evidence=include_expanded_evidence,
+            ),
             encoding="utf-8",
         )
 

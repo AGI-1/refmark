@@ -1,0 +1,12 @@
+AGENTS.md
+review_*.txt
+*_review*.txt
+docs/refmark_model_handoff*.md
+examples/*/output_*/
+examples/*/output*/**
+refmark_train/runs/
+refmark_train/data/
+refmark_train/source_docs/
+.pytest_cache/
+build/
+refmark.egg-info/
