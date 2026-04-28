@@ -48,6 +48,9 @@ Tried so far:
 | Direct text -> article classifier | negative | Hit@10 only `0.0395` on Gemma 200k. |
 | Text -> article-vector/query-vector distillation | weak positive | 3-cycle hit@10 around `0.28`, below BM25. |
 | Cached query embedding -> article classifier | strong but different runtime | Hit@10 `0.9377`, hit@50 `0.9819`; proves query embeddings contain learnable address signal, but still requires query embeddings at runtime. |
+| Global query reformulator | negative/weak | Naive append learned magnet terms and hurt BM25; discriminative fusion only nudged hit@10 from `0.5900` to `0.5917`. |
+| 10-article oracle reformulation | promising | Learned term bank improved hit@10 from `0.6207` to `0.6897`; per-query oracle reached `0.8966`. |
+| Tiny oracle-term predictor | promising on tiny slice | 129k params / 0.54 MB; predicted append matched `0.6897` hit@10 and improved MRR from `0.4669` to `0.5969`. |
 
 Not tried yet or only lightly touched:
 
@@ -56,6 +59,7 @@ Not tried yet or only lightly touched:
 - Compact per-ref learned vectors or prototypes distilled from query clusters, used as static metadata/features.
 - Multi-positive/range labels where several adjacent or alternative refs count as valid evidence.
 - Active adapt loop: heatmap -> add/merge/exclude/expand examples -> retrain/re-evaluate.
+- Surface-conditioned reformulation: coarse router first, then predict expansion terms only inside that local article/section surface.
 - Broader corpus reproducibility beyond BGB, especially technical documentation with article/page hierarchy.
 - Browser-side demo integration of the best static path plus visible heatmap/debug traces.
 
@@ -479,6 +483,58 @@ Current interpretation:
   replacement for embeddings in browser-offline mode.
 - This strengthens the product framing: Refmark makes the failure measurable
   and prevents us from overclaiming the training story.
+
+### Query Reformulation And Surface-Conditioned Navigation
+
+We then tested whether a tiny model can improve BM25 by predicting query
+expansion terms. This is deliberately smaller than semantic embedding
+distillation: the model only needs to add useful corpus-local terms, and BM25 or
+a reranker does the actual retrieval.
+
+Global reformulation was mostly negative:
+
+| Run | hit@10 | MRR | Notes |
+| --- | ---: | ---: | --- |
+| BM25 baseline | 0.5900 | 0.4076 | 3-cycle held-out split. |
+| naive predicted append | 0.5042 | 0.3461 | Learned generic legal magnets. |
+| discriminative predicted append | 0.5578 | 0.3871 | Less bad, still below BM25. |
+| discriminative side-channel fusion | 0.5917 | 0.4083 | Barely positive. |
+
+The useful signal appeared after constraining the problem to a 10-article slice
+and deriving oracle rank-improving terms:
+
+| Method | hit@1 | hit@10 | MRR |
+| --- | ---: | ---: | ---: |
+| raw BM25 | 0.3793 | 0.6207 | 0.4669 |
+| learned train-derived term bank | 0.4483 | 0.6897 | 0.5122 |
+| per-query oracle expansion | 0.8276 | 0.8966 | 0.8487 |
+| tiny oracle-term predictor append | 0.5172 | 0.6897 | 0.5969 |
+| tiny oracle-term predictor fusion | 0.4138 | 0.6552 | 0.4982 |
+
+Latest scripts:
+
+- `examples/bgb_browser_search/train_bgb_query_reformulator.py`
+- `examples/bgb_browser_search/iterate_bgb_oracle_reformulation.py`
+- `examples/bgb_browser_search/train_bgb_oracle_reformulation_predictor.py`
+
+Latest reports:
+
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_query_reformulator_fusion_probe_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_10articles_10iters.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_predictor_10articles_report.json`
+
+Interpretation:
+
+- Query expansion has real ceiling when terms are locally relevant.
+- Global expansion learns cross-article magnets and can damage retrieval.
+- The next plausible architecture is an ensemble:
+
+```text
+query -> coarse surface router -> local term predictor -> BM25/reranker -> Refmark eval
+```
+
+This is exactly where Refmark matters: we can measure whether each layer
+actually recovers the same evidence refs and identify where the ensemble fails.
 
 ## Natural Query Judge Results
 

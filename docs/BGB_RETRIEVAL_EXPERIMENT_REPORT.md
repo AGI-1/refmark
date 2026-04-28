@@ -832,6 +832,45 @@ Important interpretation:
 - This does not satisfy the fully browser-offline goal because the embedding
   model is still required at query time.
 
+### Query Reformulation
+
+We also tested a smaller offline idea: train a tiny model to predict
+corpus-local expansion terms, then feed those terms into BM25 or a reranker.
+This is not meant to replace semantic embeddings directly. It asks whether a
+cheap model can push lexical retrieval toward the right article by adding terms
+that are useful inside the corpus.
+
+Global reformulation was weak:
+
+| Method | hit@10 | MRR | Notes |
+| --- | ---: | ---: | --- |
+| BM25 baseline | 0.5900 | 0.4076 | 3-cycle held-out split. |
+| naive predicted append | 0.5042 | 0.3461 | Generic legal magnets harmed retrieval. |
+| discriminative predicted append | 0.5578 | 0.3871 | Better, still below BM25. |
+| discriminative side-channel fusion | 0.5917 | 0.4083 | Barely positive. |
+
+The promising signal appears when the surface is small. On a 10-article random
+slice:
+
+| Method | hit@1 | hit@10 | MRR |
+| --- | ---: | ---: | ---: |
+| raw BM25 | 0.3793 | 0.6207 | 0.4669 |
+| learned train-derived term bank | 0.4483 | 0.6897 | 0.5122 |
+| per-query oracle expansion | 0.8276 | 0.8966 | 0.8487 |
+| tiny oracle-term predictor append | 0.5172 | 0.6897 | 0.5969 |
+| tiny oracle-term predictor fusion | 0.4138 | 0.6552 | 0.4982 |
+
+The predictor artifact was tiny: `129,801` parameters and about `0.54 MB`.
+However, samples still show cross-article term leakage. The next serious test
+should not be a larger global reformulator. It should be surface-conditioned:
+
+```text
+query -> coarse article/section router -> local term predictor -> BM25/reranker
+```
+
+This fits the larger BGB direction: use small models as an ensemble that first
+breaks down the search area and then navigates locally.
+
 ## Mixed Target / Range Evidence
 
 Separate local OSHA Markdown run:

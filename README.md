@@ -4,16 +4,18 @@
 
 Turn your corpus into a regression test suite for retrieval.
 
-Refmark turns documents and code into stable, addressable evidence regions.
-Once a corpus has refs like `policy:P13`, any retriever, reranker, embedder,
-query rewriter, context-expansion policy, or small trained resolver can be
-evaluated by the same concrete question:
+Refmark turns documents and code into a stable, addressable evidence space for
+AI systems. Once a corpus has refs like `policy:P13`, any retriever, reranker,
+embedder, query rewriter, context-expansion policy, citation generator, or small
+trained resolver can be evaluated by the same concrete question:
 
 > Did it recover the correct source region or range?
 
 That makes RAG evaluation feel more like CI than one-off answer judging. When
 the corpus changes, Refmark can identify which refs changed or disappeared so
 only affected evaluation and training examples need review.
+
+Short version: model guesses become measurable.
 
 ## 30-Second Mental Model
 
@@ -113,42 +115,22 @@ edits. Instead of asking a model to patch drifting line numbers or copied
 context, Refmark lets tools target explicit regions and apply bounded edits
 through `apply_ref_diff`.
 
-This publish layout keeps the stable surface explicit:
+## Public Surface
 
-1. corpus/test-suite helpers for `query -> gold refs/ranges` evaluation
-2. deterministic locate-only QA and citation evaluation with data-smell metrics
-3. highlighted review of cited regions for human-in-the-loop audit workflows
-4. stable same-file multi-region editing for Python and TypeScript through `apply_ref_diff`
-5. lightweight pipeline helpers for paste-ready cited prompts, region manifests,
-   context expansion, and document-to-document region mapping
-6. portable search-index helpers for corpus-in, searchable-region-index-out workflows
-7. exploratory corpus-local anchor prediction with retained derived datasets
-8. small deterministic smoke checks that prove the public artifact works locally
+The stable package surface is intentionally small:
 
-## Included Here
+- `CorpusMap`, `EvalExample`, `EvalSuite`, and `EvalRun` for evidence-region
+  evaluation.
+- `map`, `expand`, `pack-context`, `build-index`, `search-index`, and
+  `eval-index` for corpus-to-eval workflows.
+- `highlight`, `parse_citation_refs`, and citation scoring helpers for
+  reviewable model citations.
+- `Refmarker` for pass-through marking and shadow registries.
+- `apply_ref_diff` and the MCP server for bounded same-file multi-region edits.
 
-- `refmark/`
-  - the publishable package surface
-- `scripts/`
-  - shell-friendly wrappers for `apply_ref_diff` and persistent shadow sessions
-- `tests/`
-  - focused tests for the stable surface
-- `docs/`
-  - curated user-facing and publication-facing notes
-- `examples/`
-  - runnable citation-evaluation and multidiff playgrounds
-- `refmark_train/`
-  - exploratory corpus-local citation-localization prototype with retained derived datasets
-
-## Not Included In This Publish Surface
-
-- broad benchmark CLI scaffolding
-- SWE-bench harnesses
-- agentic experiment runners
-- large result dumps
-- redistributed raw/source document payloads
-
-Those remain useful research assets, but they are intentionally outside this cleaned publish subtree.
+Research demos, benchmark outputs, and training experiments are kept separate
+from the core claim. They are useful because the same refs/ranges make their
+successes and failures measurable.
 
 ## Quick Start
 
@@ -194,7 +176,12 @@ Citation ranges and edit ranges intentionally differ. Citation ranges such as
 `policy:P03-P05` are inclusive evidence ranges; `apply_ref_diff` boundary
 ranges stop before `end_ref`. See [Range And Citation Semantics](docs/RANGE_AND_CITATION_SEMANTICS.md).
 
-To evaluate an existing retriever against stable evidence refs:
+## Evidence Evaluation API
+
+`EvalSuite` is the attach point for existing RAG systems. It does not care
+whether hits came from BM25, embeddings, a vector database, a reranker, query
+rewriting, or a small trained resolver. The retriever only has to return refs
+or hits that contain refs.
 
 ```python
 from refmark import CorpusMap, EvalExample, EvalSuite
@@ -218,6 +205,56 @@ run = suite.evaluate(my_retriever, k=5)
 print(run.metrics)
 print([item.to_dict() for item in suite.stale_examples()])
 ```
+
+For JSONL eval suites:
+
+```jsonl
+{"query":"Which clause says expedited shipping is non-refundable?","gold_refs":["policy:P13"]}
+{"query":"What evidence covers refunds and shipping?","gold_refs":["policy:P12-policy:P13"]}
+```
+
+```python
+from refmark import CorpusMap, EvalSuite
+
+corpus = CorpusMap.from_manifest(".refmark/policy_manifest.jsonl")
+suite = EvalSuite.from_jsonl(
+    "eval_questions.jsonl",
+    corpus=corpus,
+    attach_source_hashes=True,
+)
+
+runs = suite.compare(
+    {
+        "bm25": bm25_retriever,
+        "embedding": embedding_retriever,
+        "hybrid": hybrid_retriever,
+    },
+    k=10,
+)
+
+for name, run in runs.items():
+    run.write_json(f"runs/{name}.json")
+    print(name, run.metrics)
+```
+
+Retriever outputs can be plain stable refs, dictionaries, or small objects:
+
+```python
+[
+    "policy:P13",
+    {"stable_ref": "policy:P12", "score": 0.72},
+    {
+        "stable_ref": "policy:P12",
+        "context_refs": ["policy:P12", "policy:P13"],
+        "score": 0.66,
+    },
+]
+```
+
+The report includes exact hits, range/context coverage, precision, score-margin
+diagnostics, hard-ref heatmaps, wrong-top confusions, stale examples, and
+adaptation hints. That makes retrieval quality inspectable below answer prose:
+you can see whether a pipeline found the evidence required to answer.
 
 To build a tiny searchable documentation index:
 
@@ -388,6 +425,7 @@ the hypothesis is already solved.
 - [docs/MCP_USAGE.md](docs/MCP_USAGE.md)
 - [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
 - [docs/PRODUCTIZATION_TASKS.md](docs/PRODUCTIZATION_TASKS.md)
+- [docs/CURRENT_STATE_REVIEW.md](docs/CURRENT_STATE_REVIEW.md)
 - [docs/CURRENT_BENCHMARK_SNAPSHOT.md](docs/CURRENT_BENCHMARK_SNAPSHOT.md)
 - [docs/TRAINING_PROTOTYPE.md](docs/TRAINING_PROTOTYPE.md)
 

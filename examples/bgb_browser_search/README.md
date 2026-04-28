@@ -280,6 +280,17 @@ set. The artifact was about 20.4 MB and the classifier pass took about
 but it shows that Refmark supervision can train a cheap corpus-local address
 head on top of an existing embedding system.
 
+Query reformulation was tested as a smaller offline path. Global query ->
+expansion-term prediction is not good enough yet: naive appending hurt BM25,
+and discriminative side-channel fusion only nudged hit@10 from `0.5900` to
+`0.5917`. A tiny 10-article oracle loop is much more encouraging: raw BM25
+hit@10 was `0.6207`, learned train-derived term banks reached `0.6897`, and
+per-query oracle expansion reached `0.8966`. A 129k-param predictor trained on
+oracle-improving terms matched the learned-bank hit@10 on that tiny slice.
+This suggests the next shape should be surface-conditioned: first narrow to a
+small article/section surface, then predict local expansion terms inside that
+surface.
+
 ```bash
 python examples/bgb_browser_search/train_bgb_query_embedding_classifier.py \
   --stress-report examples/bgb_browser_search/output_full_qwen_turbo/bgb_stress_eval_200k_cycle1_qwen_v2.json \

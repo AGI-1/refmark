@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from collections import Counter, defaultdict
+import json
 from pathlib import Path
 import re
 from typing import Any, Callable, Iterable
@@ -272,6 +273,9 @@ class EvalRun:
             "examples": [item.to_dict() for item in self.examples],
         }
 
+    def write_json(self, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
 
 @dataclass(frozen=True)
 class EvalSuite:
@@ -281,6 +285,23 @@ class EvalSuite:
     @classmethod
     def from_rows(cls, rows: Iterable[dict[str, Any]], *, corpus: CorpusMap) -> "EvalSuite":
         return cls([EvalExample.from_dict(row) for row in rows], corpus)
+
+    @classmethod
+    def from_jsonl(
+        cls,
+        path: str | Path,
+        *,
+        corpus: CorpusMap,
+        attach_source_hashes: bool = False,
+    ) -> "EvalSuite":
+        """Load JSONL rows with `query` and `gold_refs` fields."""
+
+        rows: list[dict[str, Any]] = []
+        for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+        suite = cls.from_rows(rows, corpus=corpus)
+        return suite.with_source_hashes() if attach_source_hashes else suite
 
     def with_source_hashes(self) -> "EvalSuite":
         return EvalSuite([example.with_source_hashes(self.corpus) for example in self.examples], self.corpus)

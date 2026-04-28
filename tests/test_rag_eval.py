@@ -58,6 +58,24 @@ def test_eval_suite_detects_stale_examples_from_region_hashes():
     assert stale[0].missing_refs == []
 
 
+def test_eval_suite_loads_jsonl_and_writes_run_report(tmp_path):
+    corpus = CorpusMap.from_records([_record("P01", "Refunds are available within 30 days.", 1)])
+    examples_path = tmp_path / "examples.jsonl"
+    report_path = tmp_path / "run.json"
+    examples_path.write_text(
+        '{"query":"refund window?","gold_refs":["policy:P01"]}\n',
+        encoding="utf-8",
+    )
+
+    suite = EvalSuite.from_jsonl(examples_path, corpus=corpus, attach_source_hashes=True)
+    run = suite.evaluate(lambda _query: [{"stable_ref": "policy:P01", "score": 1.0}], k=1)
+    run.write_json(report_path)
+
+    assert suite.examples[0].source_hashes == {"policy:P01": "h-P01-37"}
+    assert report_path.exists()
+    assert '"hit_at_k": 1.0' in report_path.read_text(encoding="utf-8")
+
+
 def test_corpus_map_reports_added_removed_and_changed_refs():
     previous = CorpusMap.from_records(
         [
