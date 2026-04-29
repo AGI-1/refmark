@@ -37,6 +37,7 @@ DEFAULT_EVAL = BASE / "balanced_section_eval_modes.json"
 DEFAULT_EMBEDDINGS = BASE / "embedding_cache_qwen3_8b_balanced.jsonl"
 DEFAULT_HEATMAP = BASE / "fastapi_structure_heatmap.html"
 DEFAULT_SHADOW_METADATA = BASE / "adaptive_shadow_metadata.json"
+HEATMAP_TEMPLATE = Path("examples/portable_search_index/fastapi_structure_heatmap_template.html")
 EMBED_ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
 EMBED_MODEL = "qwen/qwen3-embedding-8b"
 ADAPTIVE_EMBED_SUFFIX = ".adaptive"
@@ -74,7 +75,7 @@ def main() -> None:
         ensure_adaptive_document_embeddings(index, shadow_metadata, adaptive_embedding_cache_path(Path(args.embedding_cache)), api_key=api_key, workers=args.concurrency)
         new_eval = evaluate_modes(index, questions, Path(args.embedding_cache), shadow_metadata=shadow_metadata, index_path=args.index, questions_path=args.questions)
         Path(args.eval).write_text(json.dumps(new_eval, indent=2, ensure_ascii=False), encoding="utf-8")
-        update_heatmap(Path(args.heatmap), new_eval)
+        update_heatmap(Path(args.heatmap), new_eval, index=index, questions=questions)
         print(json.dumps({"changed": 0, "metrics": {k: v["metrics"] for k, v in new_eval["methods"].items()}}, indent=2))
         return
 
@@ -170,7 +171,7 @@ def main() -> None:
 
     new_eval = evaluate_modes(index, questions, Path(args.embedding_cache), shadow_metadata=shadow_metadata, index_path=args.index, questions_path=args.questions)
     Path(args.eval).write_text(json.dumps(new_eval, indent=2, ensure_ascii=False), encoding="utf-8")
-    update_heatmap(Path(args.heatmap), new_eval)
+    update_heatmap(Path(args.heatmap), new_eval, index=index, questions=questions)
     print(json.dumps({"changed": len(changed), "targets": targets, "metrics": {k: v["metrics"] for k, v in new_eval["methods"].items()}}, indent=2))
 
 
@@ -978,14 +979,25 @@ def hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def update_heatmap(path: Path, eval_payload: dict[str, Any]) -> None:
-    if not path.exists():
+def update_heatmap(
+    path: Path,
+    eval_payload: dict[str, Any],
+    *,
+    index: PortableBM25Index | None = None,
+    questions: list[dict[str, Any]] | None = None,
+) -> None:
+    if path.exists():
+        html = path.read_text(encoding="utf-8")
+    elif HEATMAP_TEMPLATE.exists():
+        html = HEATMAP_TEMPLATE.read_text(encoding="utf-8")
+    else:
         return
-    html = path.read_text(encoding="utf-8")
     data_match = re.search(r"const DATA=(.*?);\s*const SUMMARY=(.*?);\nconst canvas=", html, flags=re.S)
     if not data_match:
         return
     data = json.loads(_repair_js_json(data_match.group(1)))
+    if not data and index is not None:
+        data = heatmap_data_from_index(index, questions or [])
     method_results = {
         method: {row["stable_ref"]: [] for row in payload["results"]}
         for method, payload in eval_payload["methods"].items()
@@ -1008,6 +1020,46 @@ def update_heatmap(path: Path, eval_payload: dict[str, Any]) -> None:
     html = html[: data_match.start()] + replacement + html[data_match.end() :]
     html = replace_weak_table(html, data, default_mode="hybrid_qwen3_w035")
     path.write_text(html, encoding="utf-8")
+
+
+def heatmap_data_from_index(index: PortableBM25Index, questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped_questions = group_questions(questions)
+    rows = []
+    for region in index.regions:
+        stable_ref = region.stable_ref
+        qrows = grouped_questions.get(stable_ref, [])
+        rows.append(
+            {
+                "doc_id": region.doc_id,
+                "doc_label": doc_label_for_region(region),
+                "title": region.view.summary or region.text.splitlines()[0][:90] or stable_ref,
+                "range_ref": stable_ref,
+                "source_path": region.source_path,
+                "refs": [stable_ref],
+                "tokens": approx_tokens(region.text),
+                "chars": len(region.text),
+                "excluded_refs": 1 if region.search_excluded else 0,
+                "excluded": region.search_excluded,
+                "roles": region.roles,
+                "exclusion_reasons": [region.search_exclusion_reason] if region.search_exclusion_reason else [],
+                "metrics": {},
+                "questions_list": [
+                    {"variant": str(row.get("variant") or row.get("metadata", {}).get("style") or "query"), "query": str(row.get("query", ""))}
+                    for row in qrows
+                ],
+            }
+        )
+    return rows
+
+
+def doc_label_for_region(region: SearchRegion) -> str:
+    source = Path(region.source_path).stem if region.source_path else region.doc_id
+    label = source
+    if label.startswith("docs_en_docs_"):
+        label = label[len("docs_en_docs_") :]
+    if label.endswith("_md"):
+        label = label[:-3]
+    return label.replace("_", "/")
 
 
 def _repair_js_json(value: str) -> str:
