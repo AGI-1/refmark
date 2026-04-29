@@ -76,6 +76,25 @@ def test_eval_suite_loads_jsonl_and_writes_run_report(tmp_path):
     assert '"hit_at_k": 1.0' in report_path.read_text(encoding="utf-8")
 
 
+def test_eval_suite_preserves_saved_source_hashes_for_stale_checks(tmp_path):
+    original = CorpusMap.from_records([_record("P01", "Original refund text.", 1)])
+    current = CorpusMap.from_records([_record("P01", "Changed refund text.", 1)])
+    examples_path = tmp_path / "examples.jsonl"
+    saved_path = tmp_path / "saved.jsonl"
+    suite = EvalSuite(
+        examples=[EvalExample("refund?", ["policy:P01"]).with_source_hashes(original)],
+        corpus=original,
+    )
+    suite.to_jsonl(examples_path)
+
+    loaded = EvalSuite.from_jsonl(examples_path, corpus=current, attach_source_hashes=True)
+    loaded.to_jsonl(saved_path)
+
+    assert loaded.examples[0].source_hashes == {"policy:P01": "h-P01-21"}
+    assert loaded.stale_examples()[0].changed_refs == ["policy:P01"]
+    assert '"source_hashes"' in saved_path.read_text(encoding="utf-8")
+
+
 def test_corpus_map_reports_added_removed_and_changed_refs():
     previous = CorpusMap.from_records(
         [
@@ -95,6 +114,56 @@ def test_corpus_map_reports_added_removed_and_changed_refs():
     assert diff["changed"] == ["policy:P01"]
     assert diff["removed"] == ["policy:P02"]
     assert diff["added"] == ["policy:P03"]
+
+
+def test_corpus_map_snapshots_external_revision_metadata():
+    corpus = CorpusMap.from_records(
+        [
+            _record("P02", "Beta", 2),
+            _record("P01", "Alpha", 1),
+        ],
+        revision_id="git:abc123",
+        metadata={"source_path": "docs/policy.md"},
+    )
+
+    snapshot = corpus.snapshot()
+
+    assert snapshot.revision_id == "git:abc123"
+    assert snapshot.region_count == 2
+    assert snapshot.stable_refs == ["policy:P01", "policy:P02"]
+    assert snapshot.metadata == {"source_path": "docs/policy.md"}
+    assert snapshot.to_dict()["fingerprint"] == corpus.fingerprint
+
+
+def test_corpus_revision_diff_marks_examples_stale():
+    previous = CorpusMap.from_records(
+        [
+            _record("P01", "Alpha", 1),
+            _record("P02", "Beta", 2),
+        ],
+        revision_id="rev-a",
+    )
+    current = CorpusMap.from_records(
+        [
+            _record("P01", "Alpha changed", 1),
+            _record("P03", "Gamma", 3),
+        ],
+        revision_id="rev-b",
+    )
+    changed_example = EvalExample("alpha?", ["policy:P01"]).with_source_hashes(previous)
+    removed_example = EvalExample("beta?", ["policy:P02"]).with_source_hashes(previous)
+    unaffected_example = EvalExample("new?", ["policy:P03"])
+
+    diff = current.diff_revision(previous)
+    stale = diff.stale_examples([changed_example, removed_example, unaffected_example])
+
+    assert diff.previous_revision_id == "rev-a"
+    assert diff.current_revision_id == "rev-b"
+    assert diff.has_changes
+    assert diff.affected_refs() == ["policy:P03", "policy:P02", "policy:P01"]
+    assert [item.changed_refs for item in stale] == [["policy:P01"], []]
+    assert [item.missing_refs for item in stale] == [[], ["policy:P02"]]
+    assert diff.to_dict()["has_changes"] is True
 
 
 def test_corpus_map_uses_strict_citation_parser_for_ranges_and_doc_ids():
@@ -154,14 +223,41 @@ def test_eval_run_reports_heatmap_and_confidence_gating():
     )
 
     assert run.examples[0].score_margin == 1.0
+    assert run.examples[0].gold_mode == "single"
     assert run.diagnostics["heatmap"]["missed_queries"] == 0
+    assert run.diagnostics["by_gold_mode"]["single"]["count"] == 2.0
     assert run.diagnostics["heatmap"]["confusions"][0] == {
         "gold_ref": "policy:P02",
         "top_ref": "policy:P01",
         "count": 1,
     }
     assert run.diagnostics["selective_jump"]["confidence_field"] == "score_margin_ratio"
-    assert run.diagnostics["adaptation"][0]["action"] == "add_hard_negative_or_disambiguating_signature"
+    assert run.diagnostics["adaptation"][0]["adaptation_type"] == "confusion_mapping"
+    assert run.diagnostics["adaptation"][0]["action"] == "record_confusion_pair_and_review_resolution"
+    assert "add_hard_negative_or_disambiguating_signature" in run.diagnostics["adaptation"][0]["candidate_actions"]
+
+
+def test_eval_run_reports_range_and_distributed_gold_modes():
+    corpus = CorpusMap.from_records(
+        [
+            _record("P01", "Alpha evidence.", 1),
+            _record("P02", "Beta evidence.", 2),
+            _record("P03", "Gamma evidence.", 3),
+        ]
+    )
+    suite = EvalSuite(
+        examples=[
+            EvalExample("range?", ["policy:P01-policy:P02"]),
+            EvalExample("distributed?", ["policy:P01", "policy:P03"]),
+        ],
+        corpus=corpus,
+    )
+
+    run = suite.evaluate(lambda _query: ["policy:P01", "policy:P02", "policy:P03"], k=3)
+
+    assert [result.gold_mode for result in run.examples] == ["range", "distributed"]
+    assert run.diagnostics["by_gold_mode"]["range"]["gold_coverage"] == 1.0
+    assert run.diagnostics["by_gold_mode"]["distributed"]["gold_coverage"] == 1.0
 
 
 def test_eval_provenance_detects_input_changes(tmp_path):

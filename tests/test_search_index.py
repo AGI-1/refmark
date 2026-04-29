@@ -82,6 +82,34 @@ def test_build_and_search_local_portable_index(tmp_path: Path):
     assert "Audit logs" in hits[0].text
 
 
+def test_query_magnet_regions_are_visible_but_excluded_from_default_search(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "release_notes.md").write_text(
+        "# Release Notes\n\n"
+        "Version 1.2.3 released contributor translation updates and documentation changes for audit logs.\n",
+        encoding="utf-8",
+    )
+    (docs / "security.md").write_text(
+        "Audit logs are retained for 180 days by default.\n",
+        encoding="utf-8",
+    )
+    index_path = tmp_path / "index.json"
+
+    payload = build_search_index(docs, index_path, source="local", min_words=3)
+    index = load_search_index(index_path)
+
+    release_region = next(region for region in payload["regions"] if region["doc_id"] == "release_notes")
+    assert release_region["search_excluded"] is True
+    assert "query_magnet" in release_region["roles"]
+
+    hits = index.search("audit logs documentation changes", top_k=5)
+    assert all(hit.doc_id != "release_notes" for hit in hits)
+
+    included_hits = index.search("audit logs documentation changes", top_k=5, include_excluded=True)
+    assert any(hit.doc_id == "release_notes" and hit.search_excluded for hit in included_hits)
+
+
 def test_export_browser_search_index_contains_bm25_payload(tmp_path: Path):
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -100,6 +128,7 @@ def test_export_browser_search_index_contains_bm25_payload(tmp_path: Path):
     assert payload["schema"] == "refmark.browser_search_index.v1"
     assert payload["stats"]["regions"] == 2
     assert payload["regions"][1]["stable_ref"] == "security:P02"
+    assert payload["regions"][1]["search_excluded"] is False
     assert len(payload["regions"][1]["text"]) <= 32
     assert "audit" in payload["postings"]
     audit_postings = payload["postings"]["audit"]["p"]

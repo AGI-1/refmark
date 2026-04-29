@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from collections import Counter, defaultdict
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -23,14 +24,28 @@ class CorpusMap:
     """A stable ref -> region manifest for an addressable corpus."""
 
     records: list[RegionRecord]
+    revision_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_records(cls, records: Iterable[RegionRecord]) -> "CorpusMap":
-        return cls(list(records))
+    def from_records(
+        cls,
+        records: Iterable[RegionRecord],
+        *,
+        revision_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "CorpusMap":
+        return cls(list(records), revision_id=revision_id, metadata=dict(metadata or {}))
 
     @classmethod
-    def from_manifest(cls, path: str | Path) -> "CorpusMap":
-        return cls(read_manifest(path))
+    def from_manifest(
+        cls,
+        path: str | Path,
+        *,
+        revision_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "CorpusMap":
+        return cls(read_manifest(path), revision_id=revision_id, metadata=dict(metadata or {"manifest_path": str(path)}))
 
     @classmethod
     def from_path(
@@ -44,6 +59,8 @@ class CorpusMap:
         lines_per_chunk: int | None = None,
         min_words: int = 8,
         exclude_globs: Iterable[str] = (),
+        revision_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "CorpusMap":
         return cls(
             map_corpus(
@@ -55,12 +72,30 @@ class CorpusMap:
                 lines_per_chunk=lines_per_chunk,
                 min_words=min_words,
                 exclude_globs=exclude_globs,
-            )
+            ),
+            revision_id=revision_id,
+            metadata=dict(metadata or {"source_path": str(path)}),
         )
 
     @property
     def by_stable_ref(self) -> dict[str, RegionRecord]:
         return {_stable_ref(record): record for record in self.records}
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable digest for the manifest's address space and region content."""
+
+        rows = [
+            {
+                "stable_ref": _stable_ref(record),
+                "hash": record.hash,
+                "ordinal": record.ordinal,
+                "source_path": record.source_path,
+                "parent_region_id": record.parent_region_id,
+            }
+            for record in sorted(self.records, key=lambda record: (_stable_ref(record), record.ordinal))
+        ]
+        return _json_digest(rows)
 
     def validate_refs(self, refs: Iterable[str]) -> dict[str, list[str]]:
         missing: list[str] = []
@@ -94,6 +129,32 @@ class CorpusMap:
         changed = sorted(ref for ref in set(current) & set(old) if current[ref].hash != old[ref].hash)
         unchanged = sorted(ref for ref in set(current) & set(old) if current[ref].hash == old[ref].hash)
         return {"added": added, "removed": removed, "changed": changed, "unchanged": unchanged}
+
+    def diff_revision(self, previous: "CorpusMap") -> "CorpusRevisionDiff":
+        """Compare this external map to a previous revision of the same corpus."""
+
+        refs = self.changed_refs(previous)
+        return CorpusRevisionDiff(
+            previous_revision_id=previous.revision_id,
+            current_revision_id=self.revision_id,
+            previous_fingerprint=previous.fingerprint,
+            current_fingerprint=self.fingerprint,
+            added_refs=refs["added"],
+            removed_refs=refs["removed"],
+            changed_refs=refs["changed"],
+            unchanged_refs=refs["unchanged"],
+        )
+
+    def snapshot(self) -> "CorpusMapSnapshot":
+        """Return portable metadata for an out-of-band/shadow corpus map."""
+
+        return CorpusMapSnapshot(
+            revision_id=self.revision_id,
+            fingerprint=self.fingerprint,
+            region_count=len(self.records),
+            stable_refs=sorted(self.by_stable_ref),
+            metadata=dict(self.metadata),
+        )
 
     def context_pack(
         self,
@@ -184,11 +245,14 @@ class EvalExample:
             metadata=dict(payload.get("metadata", {})),
         )
 
-    def with_source_hashes(self, corpus: CorpusMap) -> "EvalExample":
+    def with_source_hashes(self, corpus: CorpusMap, *, preserve_existing: bool = True) -> "EvalExample":
+        source_hashes = dict(self.source_hashes) if preserve_existing else {}
+        for stable_ref, source_hash in corpus.source_hashes(self.gold_refs).items():
+            source_hashes.setdefault(stable_ref, source_hash)
         return EvalExample(
             query=self.query,
             gold_refs=self.gold_refs,
-            source_hashes=corpus.source_hashes(self.gold_refs),
+            source_hashes=source_hashes,
             metadata=self.metadata,
         )
 
@@ -207,6 +271,67 @@ class StaleExample:
             "example": self.example.to_dict(),
             "missing_refs": self.missing_refs,
             "changed_refs": self.changed_refs,
+        }
+
+
+@dataclass(frozen=True)
+class CorpusMapSnapshot:
+    """Metadata for a refmark map that lives outside the source document."""
+
+    revision_id: str | None
+    fingerprint: str
+    region_count: int
+    stable_refs: list[str]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CorpusRevisionDiff:
+    """Ref-level lifecycle diff between two external corpus maps."""
+
+    previous_revision_id: str | None
+    current_revision_id: str | None
+    previous_fingerprint: str
+    current_fingerprint: str
+    added_refs: list[str]
+    removed_refs: list[str]
+    changed_refs: list[str]
+    unchanged_refs: list[str]
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.added_refs or self.removed_refs or self.changed_refs)
+
+    def affected_refs(self) -> list[str]:
+        return _dedupe([*self.added_refs, *self.removed_refs, *self.changed_refs])
+
+    def stale_examples(self, examples: Iterable["EvalExample"]) -> list["StaleExample"]:
+        changed = set(self.changed_refs)
+        removed = set(self.removed_refs)
+        stale: list[StaleExample] = []
+        for example in examples:
+            refs = list(example.source_hashes) if example.source_hashes else _literal_refs_from_gold(example.gold_refs)
+            missing_refs = sorted(ref for ref in refs if ref in removed)
+            changed_refs = sorted(ref for ref in refs if ref in changed)
+            if missing_refs or changed_refs:
+                stale.append(StaleExample(example=example, missing_refs=missing_refs, changed_refs=changed_refs))
+        return stale
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "previous_revision_id": self.previous_revision_id,
+            "current_revision_id": self.current_revision_id,
+            "previous_fingerprint": self.previous_fingerprint,
+            "current_fingerprint": self.current_fingerprint,
+            "added_refs": self.added_refs,
+            "removed_refs": self.removed_refs,
+            "changed_refs": self.changed_refs,
+            "unchanged_refs": self.unchanged_refs,
+            "affected_refs": self.affected_refs(),
+            "has_changes": self.has_changes,
         }
 
 
@@ -240,6 +365,7 @@ class ContextPack:
 class EvalExampleResult:
     query: str
     gold_refs: list[str]
+    gold_mode: str
     retrieved_refs: list[str]
     context_refs: list[str]
     hit_at_1: bool
@@ -303,8 +429,17 @@ class EvalSuite:
         suite = cls.from_rows(rows, corpus=corpus)
         return suite.with_source_hashes() if attach_source_hashes else suite
 
-    def with_source_hashes(self) -> "EvalSuite":
-        return EvalSuite([example.with_source_hashes(self.corpus) for example in self.examples], self.corpus)
+    def with_source_hashes(self, *, preserve_existing: bool = True) -> "EvalSuite":
+        return EvalSuite(
+            [example.with_source_hashes(self.corpus, preserve_existing=preserve_existing) for example in self.examples],
+            self.corpus,
+        )
+
+    def to_jsonl(self, path: str | Path) -> None:
+        """Persist eval rows, including source hashes, for later stale checks."""
+
+        lines = [json.dumps(example.to_dict(), ensure_ascii=False) for example in self.examples]
+        Path(path).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
     def validate_refs(self) -> dict[str, list[dict[str, Any]]]:
         missing: list[dict[str, Any]] = []
@@ -354,6 +489,7 @@ def _evaluate_example(example: EvalExample, corpus: CorpusMap, retriever: Retrie
     return EvalExampleResult(
         query=example.query,
         gold_refs=gold_refs,
+        gold_mode=_gold_mode(example, gold_refs),
         retrieved_refs=retrieved_refs,
         context_refs=context_refs,
         hit_at_1=bool(hits and set(hits[0].context_refs or [hits[0].stable_ref]) & gold_set),
@@ -393,6 +529,13 @@ def _summarize_results(results: list[EvalExampleResult]) -> dict[str, float]:
     }
 
 
+def _summarize_by_gold_mode(results: list[EvalExampleResult]) -> dict[str, dict[str, float]]:
+    grouped: dict[str, list[EvalExampleResult]] = defaultdict(list)
+    for result in results:
+        grouped[result.gold_mode].append(result)
+    return {mode: _summarize_results(items) for mode, items in sorted(grouped.items())}
+
+
 def diagnose_results(
     results: list[EvalExampleResult],
     *,
@@ -404,9 +547,22 @@ def diagnose_results(
     heatmap = failure_heatmap(results, hard_ref_limit=hard_ref_limit, confusion_limit=confusion_limit)
     return {
         "heatmap": heatmap,
+        "by_gold_mode": _summarize_by_gold_mode(results),
         "selective_jump": selective_jump_diagnostics(results),
         "adaptation": adaptation_recommendations(heatmap),
     }
+
+
+def _gold_mode(example: EvalExample, expanded_gold_refs: list[str]) -> str:
+    mode = example.metadata.get("gold_mode")
+    if mode:
+        return str(mode)
+    citations = list(parse_citation_refs(example.gold_refs))
+    if any(citation.is_range for citation in citations):
+        return "range"
+    if len(expanded_gold_refs) <= 1:
+        return "single"
+    return "distributed"
 
 
 def failure_heatmap(
@@ -503,30 +659,53 @@ def selective_jump_diagnostics(
 
 
 def adaptation_recommendations(heatmap: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
-    """Turn heatmap symptoms into concrete next adaptation actions."""
+    """Turn heatmap symptoms into concrete next adaptation actions.
+
+    These are recommendations, not automatic corpus mutations. Refmark keeps the
+    evidence address space explicit so a review loop can decide whether a weak
+    area needs eval-data repair, region-boundary changes, exclusion/role marks,
+    or retriever/ranker tuning.
+    """
 
     recommendations: list[dict[str, Any]] = []
     for row in heatmap.get("hard_refs", []):
         if row.get("miss_at_k", 0) <= 0:
             continue
-        action = "add_queries_or_aliases"
+        action = "add_or_rewrite_eval_queries"
+        adaptation_type = "validation"
         if row.get("hit_at_k", 1.0) == 0.0:
-            action = "review_gold_or_region_granularity"
+            action = "review_gold_refs_or_region_boundaries"
+            adaptation_type = "region_or_validation"
         recommendations.append(
             {
                 "ref": row["ref"],
+                "adaptation_type": adaptation_type,
                 "action": action,
                 "reason": f"missed {row['miss_at_k']} of {row['count']} eval queries at k",
                 "sample_queries": [sample["query"] for sample in row.get("sample_misses", [])],
+                "candidate_actions": [
+                    "rewrite_drifted_questions",
+                    "add_valid_alternate_gold_refs",
+                    "split_broad_gold_range",
+                    "extend_gold_range_to_retrieved_neighbor",
+                    "mark_query_magnet_or_hub_for_exclusion",
+                ],
             }
         )
     for row in heatmap.get("confusions", []):
         recommendations.append(
             {
                 "ref": row["gold_ref"],
-                "action": "add_hard_negative_or_disambiguating_signature",
+                "adaptation_type": "confusion_mapping",
+                "action": "record_confusion_pair_and_review_resolution",
                 "reason": f"wrong top ref {row['top_ref']} appeared {row['count']} times",
-                "negative_ref": row["top_ref"],
+                "confused_with_ref": row["top_ref"],
+                "candidate_actions": [
+                    "add_hard_negative_or_disambiguating_signature",
+                    "add_alternate_gold_if_competing_ref_is_valid",
+                    "merge_or_link_equivalent_sections",
+                    "tune_retriever_or_reranker_for_confusion_pair",
+                ],
             }
         )
     return recommendations[:limit]
@@ -571,6 +750,20 @@ def _dedupe(values: Iterable[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _json_digest(value: Any) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _literal_refs_from_gold(gold_refs: Iterable[str]) -> list[str]:
+    refs: list[str] = []
+    for citation in parse_citation_refs(gold_refs):
+        refs.append(citation.stable_ref)
+        if citation.stable_end_ref:
+            refs.append(citation.stable_end_ref)
+    return _dedupe(refs)
 
 
 def _mean(values: Iterable[float]) -> float:

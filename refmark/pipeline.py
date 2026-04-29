@@ -34,6 +34,29 @@ class RegionRecord:
 
 
 @dataclass(frozen=True)
+class SectionEntry:
+    doc_id: str
+    title: str
+    level: int
+    heading_ref: str
+    parent_ref: str | None
+    start_ref: str
+    end_ref: str
+    refs: list[str]
+    source_path: str | None = None
+    ordinal: int = 0
+
+    @property
+    def range_ref(self) -> str:
+        return self.start_ref if self.start_ref == self.end_ref else f"{self.start_ref}-{self.end_ref}"
+
+    def to_dict(self) -> dict[str, object]:
+        payload = asdict(self)
+        payload["range_ref"] = self.range_ref
+        return payload
+
+
+@dataclass(frozen=True)
 class AlignmentCandidate:
     source_doc_id: str
     source_region_id: str
@@ -167,6 +190,53 @@ def read_manifest(path: str | Path) -> list[RegionRecord]:
             )
         )
     return records
+
+
+def build_section_map(records: Iterable[RegionRecord]) -> list[SectionEntry]:
+    """Build a heading/title TOC layer from a region manifest.
+
+    This keeps source documents untouched: headings become navigation metadata
+    that point to concrete region ranges, while evidence scoring can still
+    decide whether heading-only regions should count.
+    """
+    by_doc: dict[str, list[RegionRecord]] = {}
+    for record in records:
+        by_doc.setdefault(record.doc_id, []).append(record)
+    sections: list[SectionEntry] = []
+    for doc_id, doc_records in sorted(by_doc.items()):
+        ordered = sorted(doc_records, key=lambda record: record.ordinal)
+        heading_rows = [
+            (index, record, _heading_level(record.text))
+            for index, record in enumerate(ordered)
+            if _heading_level(record.text) is not None
+        ]
+        for heading_index, heading_record, level in heading_rows:
+            assert level is not None
+            end_index = len(ordered) - 1
+            for next_index, _next_record, next_level in heading_rows:
+                if next_index <= heading_index:
+                    continue
+                if next_level is not None and next_level <= level:
+                    end_index = next_index - 1
+                    break
+            section_records = ordered[heading_index : end_index + 1]
+            refs = [_stable_ref(record) for record in section_records]
+            parent_ref = f"{doc_id}:{heading_record.parent_region_id}" if heading_record.parent_region_id else None
+            sections.append(
+                SectionEntry(
+                    doc_id=doc_id,
+                    title=_heading_title(heading_record.text),
+                    level=level,
+                    heading_ref=_stable_ref(heading_record),
+                    parent_ref=parent_ref,
+                    start_ref=refs[0],
+                    end_ref=refs[-1],
+                    refs=refs,
+                    source_path=heading_record.source_path,
+                    ordinal=heading_record.ordinal,
+                )
+            )
+    return sections
 
 
 def expand_region_context(
@@ -428,6 +498,10 @@ def _stable_text_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def _stable_ref(record: RegionRecord) -> str:
+    return f"{record.doc_id}:{record.region_id}"
+
+
 def _heading_level(text: str) -> int | None:
     first_line = text.strip().splitlines()[0] if text.strip() else ""
     markdown = re.match(r"^(#{1,6})\s+\S", first_line)
@@ -436,6 +510,11 @@ def _heading_level(text: str) -> int | None:
     if first_line and set(first_line) <= {"=", "-"}:
         return None
     return None
+
+
+def _heading_title(text: str) -> str:
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    return re.sub(r"^#{1,6}\s+", "", first_line).strip() or first_line or "Untitled section"
 
 
 def _token_set(text: str) -> set[str]:

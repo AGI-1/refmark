@@ -1,0 +1,31 @@
+corpus_path: examples/portable_search_index/output/online_corpora/fastapi_docs
+density: balanced
+min_words: 8
+include_embeddings: false
+
+question_generation:
+  enabled: false
+
+retrieval_views:
+  enabled: false
+
+judge:
+  enabled: false
+
+loop:
+  max_iterations: 1
+  target_hit_at_k: 0.8
+  target_gold_coverage: 0.8
+  top_k: 10
+  sample_size: 160
+  seed: 29
+
+artifacts:
+  cache_dir: examples/portable_search_index/output/fastapi_pipeline/cache
+  output_dir: examples/portable_search_index/output/fastapi_pipeline
+  view_cache: examples/portable_search_index/output/fastapi_pipeline/cache/retrieval_views.jsonl
+  question_cache: examples/portable_search_index/output/fastapi_pipeline/cache/questions.jsonl
+  judge_cache: examples/portable_search_index/output/fastapi_pipeline/cache/judgements.jsonl
+  embedding_cache_dir: examples/portable_search_index/output/fastapi_pipeline/cache/embeddings
+  overwrite: false
+

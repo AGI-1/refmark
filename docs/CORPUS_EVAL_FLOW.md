@@ -169,6 +169,41 @@ Treat the corpus manifest and eval suite as test inputs:
 - report generated-view provider/model/cache hashes so runs are reproducible;
 - fail or warn when a protected baseline regresses beyond an agreed threshold.
 
+Current CLI gate:
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest corpus.refmark.jsonl \
+  --top-k 10 \
+  --min-hit-at-k 0.80 \
+  --max-stale 0 \
+  --fail-on-regression
+```
+
+For an existing retrieval service, keep the same eval suite and current
+manifest, but replace the built-in index search with an HTTP retriever:
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest corpus.refmark.jsonl \
+  --retriever-endpoint http://localhost:8000/retrieve \
+  --min-hit-at-k 0.80 \
+  --fail-on-regression
+```
+
+For batch systems, export retriever hits as JSONL and score the file directly:
+
+```jsonl
+{"query":"...","hits":[{"stable_ref":"manual:P10","score":0.91}]}
+```
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest corpus.refmark.jsonl \
+  --retriever-results exported_hits.jsonl \
+  --min-hit-at-k 0.80
+```
+
 Training is one consumer of the same loop. A trained resolver should be accepted
 only if it beats the configured retrieval baseline on the held-out suite without
 breaking coverage or overcitation limits.

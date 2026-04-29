@@ -1,8 +1,9 @@
 import sys
 import argparse
 import json
-import sys
+import re
 from pathlib import Path
+import urllib.request
 
 from refmark.config import load_local_env
 
@@ -20,12 +21,15 @@ from refmark.pipeline import (
     RegionRecord,
     align_region_records,
     build_region_manifest,
+    build_section_map,
     evaluate_alignment_coverage,
     expand_region_context,
     read_manifest,
     render_coverage_html,
     write_manifest,
 )
+from refmark.pipeline_config import load_full_pipeline_config, write_full_pipeline_config_template
+from refmark.pipeline_runner import run_full_pipeline
 from refmark.prompt import build_reference_prompt
 from refmark.provenance import build_eval_provenance, validate_provenance
 from refmark.rag_eval import CorpusMap, EvalSuite
@@ -107,6 +111,10 @@ def main():
     map_parser.add_argument("--marked-dir", default=None, help="Optional directory for marked document copies.")
     _add_workflow_config_args(map_parser)
 
+    toc_parser = subparsers.add_parser("toc", help="Build a section/TOC map from a refmark manifest.")
+    toc_parser.add_argument("manifest", help="Manifest JSONL path.")
+    toc_parser.add_argument("-o", "--output", required=True, help="Section map JSON output path.")
+
     expand_parser = subparsers.add_parser("expand", help="Expand cited refs to neighboring manifest regions.")
     expand_parser.add_argument("manifest", help="Manifest JSONL path.")
     expand_parser.add_argument("--refs", required=True, help="Comma-separated refs or ranges, e.g. P01,P03-P04.")
@@ -171,6 +179,7 @@ def main():
     search_index_parser.add_argument("--candidate-k", type=int, default=30)
     search_index_parser.add_argument("--expand-before", type=int, default=0)
     search_index_parser.add_argument("--expand-after", type=int, default=0)
+    search_index_parser.add_argument("--include-excluded", action="store_true", help="Include regions marked excluded from default search.")
     search_index_parser.add_argument("--json", action="store_true", help="Emit JSON hits.")
 
     eval_index_parser = subparsers.add_parser(
@@ -179,12 +188,22 @@ def main():
     )
     eval_index_parser.add_argument("index", help="Index JSON produced by build-index.")
     eval_index_parser.add_argument("examples", help="JSONL rows with query and gold_refs fields.")
+    eval_index_parser.add_argument("--manifest", default=None, help="Optional current region manifest for validation and stale-ref checks.")
     eval_index_parser.add_argument("--top-k", type=int, default=10)
     eval_index_parser.add_argument("--strategy", choices=["flat", "hierarchical", "rerank"], default="flat")
     eval_index_parser.add_argument("--doc-top-k", type=int, default=5)
     eval_index_parser.add_argument("--candidate-k", type=int, default=30)
     eval_index_parser.add_argument("--expand-before", type=int, default=0)
     eval_index_parser.add_argument("--expand-after", type=int, default=0)
+    eval_index_parser.add_argument("--retriever-endpoint", default=None, help="HTTP POST retriever endpoint returning refs or hits JSON.")
+    eval_index_parser.add_argument("--retriever-results", default=None, help="JSONL query -> refs/hits export from an external retriever.")
+    eval_index_parser.add_argument("--retriever-timeout", type=float, default=30.0)
+    eval_index_parser.add_argument("--min-hit-at-k", type=float, default=None, help="Warn or fail when hit@k is below this threshold.")
+    eval_index_parser.add_argument("--min-hit-at-1", type=float, default=None, help="Warn or fail when hit@1 is below this threshold.")
+    eval_index_parser.add_argument("--min-mrr", type=float, default=None, help="Warn or fail when MRR is below this threshold.")
+    eval_index_parser.add_argument("--min-gold-coverage", type=float, default=None, help="Warn or fail when average gold coverage is below this threshold.")
+    eval_index_parser.add_argument("--max-stale", type=int, default=None, help="Warn or fail when stale examples exceed this count.")
+    eval_index_parser.add_argument("--fail-on-regression", action="store_true", help="Exit nonzero when any threshold is breached.")
     eval_index_parser.add_argument("--provenance-out", default=None, help="Optional provenance JSON output path.")
     eval_index_parser.add_argument("--expect-provenance", default=None, help="Fail if current inputs/settings differ from this provenance JSON.")
     eval_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
@@ -222,6 +241,36 @@ def main():
     discover_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     discover_parser.add_argument("--max-input-tokens", type=int, default=180000)
 
+    pipeline_config_parser = subparsers.add_parser(
+        "init-pipeline-config",
+        help="Write a template config for the full evidence-retrieval pipeline.",
+    )
+    pipeline_config_parser.add_argument("-o", "--output", required=True, help="YAML config path to write.")
+    pipeline_config_parser.add_argument("--check", action="store_true", help="Parse the written config after creating it.")
+
+    pipeline_config_check_parser = subparsers.add_parser(
+        "check-pipeline-config",
+        help="Validate and summarize a full evidence-retrieval pipeline config.",
+    )
+    pipeline_config_check_parser.add_argument("config", help="Pipeline YAML/JSON config path.")
+
+    run_pipeline_parser = subparsers.add_parser(
+        "run-pipeline",
+        help="Run the easy-mode full evidence-retrieval pipeline from a config.",
+    )
+    run_pipeline_parser.add_argument("config", help="Pipeline YAML/JSON config path.")
+
+    query_pipeline_parser = subparsers.add_parser(
+        "query-pipeline",
+        help="Query a processed pipeline output directory and return refs/sections.",
+    )
+    query_pipeline_parser.add_argument("output_dir", help="Directory produced by run-pipeline.")
+    query_pipeline_parser.add_argument("query", help="Natural-language search query.")
+    query_pipeline_parser.add_argument("--top-k", type=int, default=5)
+    query_pipeline_parser.add_argument("--expand-after", type=int, default=1)
+    query_pipeline_parser.add_argument("--include-excluded", action="store_true", help="Include query-magnet/noisy regions excluded by default.")
+    query_pipeline_parser.add_argument("--json", action="store_true", help="Emit JSON.")
+
     browser_index_parser = subparsers.add_parser(
         "export-browser-index",
         help="Export a compact browser-searchable BM25 index from a portable Refmark index.",
@@ -250,6 +299,8 @@ def main():
         _handle_enrich_prompt(args)
     elif args.command == "map":
         _handle_map(args)
+    elif args.command == "toc":
+        _handle_toc(args)
     elif args.command == "expand":
         _handle_expand(args)
     elif args.command == "align":
@@ -266,6 +317,14 @@ def main():
         _handle_question_prompt(args)
     elif args.command == "discover":
         _handle_discover(args)
+    elif args.command == "init-pipeline-config":
+        _handle_init_pipeline_config(args)
+    elif args.command == "check-pipeline-config":
+        _handle_check_pipeline_config(args)
+    elif args.command == "run-pipeline":
+        _handle_run_pipeline(args)
+    elif args.command == "query-pipeline":
+        _handle_query_pipeline(args)
     elif args.command == "export-browser-index":
         _handle_export_browser_index(args)
     elif args.command == "smoke":
@@ -440,6 +499,7 @@ def _handle_build_index(args):
     print(
         "[OK] "
         f"{stats['documents']} documents, {stats['regions']} regions, "
+        f"{stats.get('default_search_excluded_regions', 0)} excluded by default, "
         f"~{stats['approx_input_tokens']} input tokens, "
         f"estimated OpenRouter cost at mistral-nemo: ${stats['approx_openrouter_cost_usd_at_mistral_nemo']}",
         file=sys.stderr,
@@ -456,6 +516,7 @@ def _handle_search_index(args):
             candidate_k=args.candidate_k,
             expand_before=args.expand_before,
             expand_after=args.expand_after,
+            include_excluded=args.include_excluded,
         )
     elif args.strategy == "rerank":
         hits = index.search_reranked(
@@ -464,6 +525,7 @@ def _handle_search_index(args):
             candidate_k=args.candidate_k,
             expand_before=args.expand_before,
             expand_after=args.expand_after,
+            include_excluded=args.include_excluded,
         )
     else:
         hits = index.search(
@@ -471,6 +533,7 @@ def _handle_search_index(args):
             top_k=args.top_k,
             expand_before=args.expand_before,
             expand_after=args.expand_after,
+            include_excluded=args.include_excluded,
         )
     if args.json:
         print(json.dumps([hit.to_dict() for hit in hits], indent=2))
@@ -491,7 +554,7 @@ def _handle_search_index(args):
 
 def _handle_eval_index(args):
     index = load_search_index(args.index)
-    corpus = _corpus_from_search_index(index)
+    corpus = CorpusMap.from_manifest(args.manifest, metadata={"manifest_path": args.manifest}) if args.manifest else _corpus_from_search_index(index)
     rows = _read_jsonl(args.examples)
     suite = EvalSuite.from_rows(rows, corpus=corpus).with_source_hashes()
     settings = {
@@ -501,6 +564,9 @@ def _handle_eval_index(args):
         "candidate_k": args.candidate_k,
         "expand_before": args.expand_before,
         "expand_after": args.expand_after,
+        "manifest": args.manifest,
+        "retriever_endpoint": bool(args.retriever_endpoint),
+        "retriever_results": args.retriever_results,
     }
     provenance = build_eval_provenance(
         index_path=args.index,
@@ -516,42 +582,31 @@ def _handle_eval_index(args):
             print(json.dumps({"provenance_check": provenance_check}, indent=2), file=sys.stderr)
             sys.exit(2)
 
-    def retrieve(query: str):
-        if args.strategy == "hierarchical":
-            return index.search_hierarchical(
-                query,
-                top_k=args.top_k,
-                doc_top_k=args.doc_top_k,
-                candidate_k=args.candidate_k,
-                expand_before=args.expand_before,
-                expand_after=args.expand_after,
-            )
-        if args.strategy == "rerank":
-            return index.search_reranked(
-                query,
-                top_k=args.top_k,
-                candidate_k=args.candidate_k,
-                expand_before=args.expand_before,
-                expand_after=args.expand_after,
-            )
-        return index.search(
-            query,
-            top_k=args.top_k,
-            expand_before=args.expand_before,
-            expand_after=args.expand_after,
-        )
+    if args.retriever_endpoint and args.retriever_results:
+        print("Error: use only one of --retriever-endpoint or --retriever-results.", file=sys.stderr)
+        sys.exit(1)
+    if args.retriever_results:
+        retrieve = _jsonl_results_retriever(args.retriever_results)
+    elif args.retriever_endpoint:
+        retrieve = _http_retriever(args)
+    else:
+        retrieve = _index_retriever(args, index)
 
     run = suite.evaluate(retrieve, name=args.strategy, k=args.top_k)
     validation = suite.validate_refs()
     stale = [item.to_dict() for item in suite.stale_examples()]
+    ci_status = _eval_ci_status(run.metrics, len(stale), args)
     payload = {
+        "schema": "refmark.eval_index_report.v1",
         "index": args.index,
+        "manifest": args.manifest,
         "examples": args.examples,
         "settings": settings,
         "metrics": run.metrics,
         "diagnostics": run.diagnostics,
         "validation": validation,
         "stale_examples": stale,
+        "ci_status": ci_status,
         "provenance": provenance,
         "provenance_check": provenance_check,
         "results": [item.to_dict() for item in run.examples],
@@ -565,6 +620,9 @@ def _handle_eval_index(args):
         print(f"[OK] Wrote retrieval eval report to {args.output}", file=sys.stderr)
     else:
         print(output)
+    if ci_status["status"] == "fail":
+        print(json.dumps({"ci_status": ci_status}, indent=2), file=sys.stderr)
+        sys.exit(3)
 
 
 def _handle_pack_context(args):
@@ -628,6 +686,72 @@ def _handle_discover(args):
     )
 
 
+def _handle_init_pipeline_config(args):
+    write_full_pipeline_config_template(args.output)
+    if args.check:
+        config = load_full_pipeline_config(args.output)
+        print(json.dumps(config.to_dict(), indent=2))
+    else:
+        print(f"[OK] Wrote pipeline config template to {args.output}", file=sys.stderr)
+
+
+def _handle_check_pipeline_config(args):
+    config = load_full_pipeline_config(args.config)
+    payload = config.to_dict()
+    payload["summary"] = {
+        "question_generation": f"{config.question_generation.provider}:{config.question_generation.model}",
+        "retrieval_views": f"{config.retrieval_views.provider}:{config.retrieval_views.model}",
+        "judge_enabled": config.judge.enabled,
+        "enabled_embeddings": [item.name for item in config.embeddings if item.enabled],
+        "output_dir": config.artifacts.output_dir,
+        "cache_dir": config.artifacts.cache_dir,
+        "max_iterations": config.loop.max_iterations,
+    }
+    print(json.dumps(payload, indent=2))
+
+
+def _handle_run_pipeline(args):
+    summary = run_full_pipeline(args.config)
+    print(json.dumps(summary.to_dict(), indent=2))
+
+
+def _handle_query_pipeline(args):
+    output_dir = Path(args.output_dir)
+    index_path = output_dir / "docs.index.json"
+    sections_path = output_dir / "sections.json"
+    if not index_path.exists():
+        print(f"Error: missing pipeline index: {index_path}", file=sys.stderr)
+        sys.exit(1)
+    index = load_search_index(index_path)
+    hits = index.search_reranked(
+        args.query,
+        top_k=args.top_k,
+        expand_after=args.expand_after,
+        include_excluded=args.include_excluded,
+    )
+    sections = _load_section_entries(sections_path)
+    rows = []
+    for hit in hits:
+        hit_dict = hit.to_dict()
+        hit_dict["section"] = _section_for_ref(hit.stable_ref, sections)
+        rows.append(hit_dict)
+    if args.json:
+        print(json.dumps({"query": args.query, "hits": rows}, indent=2))
+        return
+    for row in rows:
+        section = row.get("section")
+        label = f" section={section['title']} range={section['range_ref']}" if section else ""
+        print(f"{row['rank']}. {row['stable_ref']} score={row['score']}{label}")
+        if row.get("source_path"):
+            print(f"   source: {row['source_path']}")
+        if row.get("context_refs"):
+            print(f"   context: {', '.join(row['context_refs'])}")
+        snippet = " ".join(str(row.get("text", "")).split())
+        if len(snippet) > 260:
+            snippet = snippet[:257].rstrip() + "..."
+        print(f"   text: {snippet}")
+
+
 def _handle_export_browser_index(args):
     payload = export_browser_search_index(
         args.index,
@@ -653,6 +777,124 @@ def _read_jsonl(path: str | Path) -> list[dict[str, object]]:
             raise ValueError(f"Expected JSON object row in {path}.")
         rows.append(payload)
     return rows
+
+
+def _index_retriever(args, index):
+    def retrieve(query: str):
+        if args.strategy == "hierarchical":
+            return index.search_hierarchical(
+                query,
+                top_k=args.top_k,
+                doc_top_k=args.doc_top_k,
+                candidate_k=args.candidate_k,
+                expand_before=args.expand_before,
+                expand_after=args.expand_after,
+            )
+        if args.strategy == "rerank":
+            return index.search_reranked(
+                query,
+                top_k=args.top_k,
+                candidate_k=args.candidate_k,
+                expand_before=args.expand_before,
+                expand_after=args.expand_after,
+            )
+        return index.search(
+            query,
+            top_k=args.top_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+
+    return retrieve
+
+
+def _http_retriever(args):
+    def retrieve(query: str):
+        body = json.dumps({"query": query, "top_k": args.top_k}).encode("utf-8")
+        request = urllib.request.Request(
+            args.retriever_endpoint,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=args.retriever_timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return payload.get("hits") or payload.get("refs") or payload.get("results") or []
+        raise ValueError("Retriever endpoint must return a JSON list or object with hits/refs/results.")
+
+    return retrieve
+
+
+def _jsonl_results_retriever(path: str | Path):
+    hits_by_query: dict[str, list[object]] = {}
+    for row in _read_jsonl(path):
+        query = row.get("query")
+        if not query:
+            raise ValueError(f"Retriever result row in {path} is missing 'query'.")
+        hits = row.get("hits") or row.get("refs") or row.get("results") or []
+        if not isinstance(hits, list):
+            raise ValueError(f"Retriever result row for query {query!r} must contain list hits/refs/results.")
+        hits_by_query[str(query)] = hits
+
+    def retrieve(query: str):
+        return hits_by_query.get(query, [])
+
+    return retrieve
+
+
+def _eval_ci_status(metrics: dict[str, float], stale_count: int, args) -> dict[str, object]:
+    failures: list[str] = []
+    warnings: list[str] = []
+
+    def check_min(metric_name: str, threshold: float | None, label: str) -> None:
+        if threshold is None:
+            return
+        value = metrics.get(metric_name, 0.0)
+        if value < threshold:
+            failures.append(f"{label} {value:.4f} is below {threshold:.4f}")
+
+    check_min("hit_at_k", args.min_hit_at_k, "hit@k")
+    check_min("hit_at_1", args.min_hit_at_1, "hit@1")
+    check_min("mrr", args.min_mrr, "MRR")
+    check_min("gold_coverage", args.min_gold_coverage, "gold coverage")
+    if args.max_stale is not None and stale_count > args.max_stale:
+        failures.append(f"stale examples {stale_count} exceeds {args.max_stale}")
+
+    if failures and not args.fail_on_regression:
+        warnings = failures
+        failures = []
+
+    return {
+        "status": "fail" if failures else ("warn" if warnings else "pass"),
+        "failures": failures,
+        "warnings": warnings,
+        "thresholds": {
+            "min_hit_at_k": args.min_hit_at_k,
+            "min_hit_at_1": args.min_hit_at_1,
+            "min_mrr": args.min_mrr,
+            "min_gold_coverage": args.min_gold_coverage,
+            "max_stale": args.max_stale,
+            "fail_on_regression": args.fail_on_regression,
+        },
+    }
+
+
+def _load_section_entries(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    return [item for item in payload.get("sections", []) if isinstance(item, dict)]
+
+
+def _section_for_ref(stable_ref: str, sections: list[dict[str, object]]) -> dict[str, object] | None:
+    for section in sections:
+        refs = section.get("refs", [])
+        if isinstance(refs, list) and stable_ref in refs:
+            return section
+    return None
 
 
 def _corpus_from_search_index(index) -> CorpusMap:
@@ -738,7 +980,7 @@ def _handle_map(args):
             doc_map = map_document(
                 file_path,
                 config=config,
-                doc_id=file_path.stem if root.is_file() else file_path.relative_to(root).as_posix(),
+                doc_id=_manifest_doc_id(file_path, root=root),
             )
         except (UnicodeDecodeError, RuntimeError, KeyError) as exc:
             print(f"[SKIP] Could not extract text from {file_path}: {exc}", file=sys.stderr)
@@ -753,6 +995,28 @@ def _handle_map(args):
 
     write_manifest(records, args.output)
     print(f"[OK] Wrote {len(records)} regions from {len(files)} file(s) to {args.output}", file=sys.stderr)
+
+
+def _manifest_doc_id(file_path: Path, *, root: Path) -> str:
+    if root.is_file():
+        stem = file_path.stem
+    else:
+        stem = file_path.relative_to(root).with_suffix("").as_posix()
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
+    return slug or file_path.stem
+
+
+def _handle_toc(args):
+    sections = build_section_map(read_manifest(args.manifest))
+    payload = {
+        "schema": "refmark.section_map.v1",
+        "manifest": args.manifest,
+        "sections": [section.to_dict() for section in sections],
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"[OK] Wrote {len(sections)} sections to {args.output}", file=sys.stderr)
 
 
 def _handle_expand(args):

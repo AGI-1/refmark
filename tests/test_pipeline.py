@@ -1,10 +1,13 @@
 import json
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from refmark.pipeline import (
     align_region_records,
     build_region_manifest,
+    build_section_map,
     evaluate_alignment_coverage,
     expand_region_context,
     read_manifest,
@@ -42,6 +45,22 @@ def test_build_region_manifest_assigns_markdown_heading_parent_regions():
     expanded = expand_region_context(records, ["P02"], same_parent=True, include_parent=True)
 
     assert [record.region_id for record in expanded] == ["P01", "P02", "P03"]
+
+
+def test_build_section_map_returns_heading_ref_ranges():
+    _marked, records = build_region_manifest(
+        "# Security\n\nToken rotation details.\n\nAudit retention details.\n\n# Billing\n\nInvoice export details.\n",
+        ".md",
+        doc_id="guide",
+    )
+
+    sections = build_section_map(records)
+
+    assert [section.title for section in sections] == ["Security", "Billing"]
+    assert sections[0].heading_ref == "guide:P01"
+    assert sections[0].range_ref == "guide:P01-guide:P03"
+    assert sections[0].refs == ["guide:P01", "guide:P02", "guide:P03"]
+    assert sections[1].range_ref == "guide:P04-guide:P05"
 
 
 def test_manifest_jsonl_roundtrip(tmp_path):
@@ -355,6 +374,7 @@ def test_pipeline_cli_question_prompt_supports_overridable_template(tmp_path):
 def test_pipeline_cli_eval_index(tmp_path):
     source = tmp_path / "source.txt"
     index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
     examples = tmp_path / "examples.jsonl"
     source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
     examples.write_text(
@@ -380,14 +400,324 @@ def test_pipeline_cli_eval_index(tmp_path):
         capture_output=True,
         text=True,
     )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(source),
+            "-o",
+            str(manifest),
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     evaluated = subprocess.run(
-        [sys.executable, "-m", "refmark.cli", "eval-index", str(index), str(examples), "--top-k", "2"],
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(examples),
+            "--manifest",
+            str(manifest),
+            "--top-k",
+            "2",
+            "--min-hit-at-k",
+            "0.9",
+        ],
         check=True,
         capture_output=True,
         text=True,
     )
 
     payload = json.loads(evaluated.stdout)
+    assert payload["schema"] == "refmark.eval_index_report.v1"
     assert payload["metrics"]["count"] == 1.0
     assert payload["metrics"]["hit_at_k"] == 1.0
+    assert payload["ci_status"]["status"] == "pass"
     assert payload["validation"] == {"missing": [], "ambiguous": []}
+
+
+def test_pipeline_cli_map_and_build_index_use_same_directory_doc_ids(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    source = docs / "security-guide.md"
+    index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    source.write_text(
+        "# Security Guide\n\n"
+        "Rotate API tokens every ninety days after replacement credentials are deployed.\n",
+        encoding="utf-8",
+    )
+    examples.write_text(
+        json.dumps({"query": "rotate api tokens", "gold_refs": ["security_guide:P02"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(docs),
+            "-o",
+            str(manifest),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(docs),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    evaluated = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(examples),
+            "--manifest",
+            str(manifest),
+            "--top-k",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(evaluated.stdout)
+    assert payload["validation"] == {"missing": [], "ambiguous": []}
+    assert payload["metrics"]["hit_at_k"] == 1.0
+
+
+def test_pipeline_cli_eval_index_fails_thresholds_and_preserves_stale_hashes(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
+    examples.write_text(
+        json.dumps(
+            {
+                "query": "refunds within 30 days",
+                "gold_refs": ["source:P01"],
+                "source_hashes": {"source:P01": "stale-hash"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(source),
+            "-o",
+            str(manifest),
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    evaluated = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(examples),
+            "--manifest",
+            str(manifest),
+            "--top-k",
+            "2",
+            "--max-stale",
+            "0",
+            "--fail-on-regression",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert evaluated.returncode == 3
+    payload = json.loads(evaluated.stdout)
+    assert payload["ci_status"]["status"] == "fail"
+    assert payload["stale_examples"][0]["changed_refs"] == ["source:P01"]
+
+
+def test_pipeline_cli_eval_index_can_call_http_retriever(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    examples = tmp_path / "examples.jsonl"
+    source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
+    examples.write_text(
+        json.dumps({"query": "refunds within 30 days", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            body = json.dumps({"hits": [{"stable_ref": "source:P01", "score": 1.0}]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        evaluated = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "refmark.cli",
+                "eval-index",
+                str(index),
+                str(examples),
+                "--retriever-endpoint",
+                f"http://127.0.0.1:{server.server_port}/retrieve",
+                "--top-k",
+                "1",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    payload = json.loads(evaluated.stdout)
+    assert payload["metrics"]["hit_at_1"] == 1.0
+    assert payload["settings"]["retriever_endpoint"] is True
+
+
+def test_pipeline_cli_eval_index_can_score_exported_retriever_results(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    examples = tmp_path / "examples.jsonl"
+    retriever_results = tmp_path / "hits.jsonl"
+    source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
+    examples.write_text(
+        json.dumps({"query": "refunds within 30 days", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+    retriever_results.write_text(
+        json.dumps({"query": "refunds within 30 days", "hits": [{"stable_ref": "source:P01", "score": 1.0}]}) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    evaluated = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(examples),
+            "--retriever-results",
+            str(retriever_results),
+            "--top-k",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(evaluated.stdout)
+    assert payload["metrics"]["hit_at_1"] == 1.0
+    assert payload["settings"]["retriever_results"] == str(retriever_results)

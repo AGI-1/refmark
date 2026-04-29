@@ -19,6 +19,17 @@ python -m refmark.cli search-index examples/portable_search_index/output/index_l
 python -m refmark.cli export-browser-index examples/portable_search_index/output/index_local.json -o examples/portable_search_index/output/index_browser.json
 ```
 
+Run the easy-mode full pipeline over the fetched FastAPI documentation corpus
+and query the processed output:
+
+```bash
+python -m refmark.cli run-pipeline examples/portable_search_index/fastapi_pipeline.local.yaml
+python -m refmark.cli query-pipeline examples/portable_search_index/output/fastapi_pipeline "How do I configure CORS for browser clients?"
+```
+
+That corpus is about 309k approximate source tokens in the retained benchmark
+snapshot. The local config does not need an API key or vector database.
+
 Build an LLM-enriched index through OpenRouter:
 
 ```bash
@@ -47,12 +58,33 @@ retrieval metadata. The useful claim is not that embeddings disappear forever;
 it is that a one-time cheap LLM pass can make lexical search much more semantic
 while keeping runtime search tiny and embeddable.
 
+Changelog/release-note-like regions are treated as query magnets. They remain
+in the index and visual reports, but generated indexes mark them as
+`exclude_from_default_search` so normal search can skip them unless the caller
+passes `--include-excluded`.
+
 For browser usage, `export-browser-index` writes a compact BM25 payload with
 postings, region metadata, and short snippets. Pair it with
 `refmark/browser_search.js` to run search fully on the client. On a single
 documentation page, elements can expose `data-refmark-ref` and the runtime can
 jump/highlight them directly, turning Refmark into semantic find for the
 current page.
+
+The FastAPI navigation experiment also includes an evidence heatmap generated
+from the same eval artifacts. It is intentionally a workbench, not just a
+chart: structural clusters follow the documentation path hierarchy, weak
+regions are visible by retrieval mode, a search field highlights matching
+sections/refs/questions, and the side panel pins the selected block's refs,
+metrics, and generated eval questions. The matching adaptation script
+(`improve_fastapi_questions.py`) can review weak blocks, write shadow
+Doc2Query metadata, rerun affected-row mini-evals, and refresh the report.
+
+That loop is the product-shaped part of this example:
+
+```text
+build index -> generate/evaluate questions -> inspect heatmap
+            -> adapt questions or shadow metadata -> compare modes again
+```
 
 On the current 2.1M-token public-docs corpus, the OpenRouter-enriched portable
 index is `12.6 MiB` raw / `2.9 MiB` gzip, while the browser BM25 export with

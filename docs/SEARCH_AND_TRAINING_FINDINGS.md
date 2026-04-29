@@ -38,7 +38,7 @@ Tried so far:
 | Raw generated aliases | negative | Pasting full synthetic questions into metadata hurt held-out BM25. |
 | Fielded BM25 / RRF over generated fields | negative | Splitting source/summary/questions/keywords into fields did not recover the lost signal. |
 | Deterministic compressed intent signatures | positive | Improved 3-cycle held-out hit@10 from `0.5912` to `0.6251`. |
-| LLM hard-article signatures | targeted positive | Repaired hard-40 hit@10 from `0.0000` baseline to `0.3030`, but needs gating to avoid global noise. |
+| LLM hard-article signatures | targeted positive, provenance-sensitive | Repaired hard zones in same-split tests, but the first cache key ignored train-query context. After hardening, clean cycle1 article-only signatures transfer only modestly. |
 | Confusion-conditioned signatures | targeted positive, modest globally | With a wider top-300 heatmap, selected hard-confusion rows improved from `0.1889` to `0.4087` hit@10 when combined with deterministic signatures; global held-out hit@10 moved from `0.6251` to `0.6293`. |
 | Split-aware selective jump | product diagnostic | Adapted indexes improve held-out fallback/candidate quality, but high-precision auto-jump coverage remains small: around `4.2%` coverage at `90%` precision for the best adapted margin gate. |
 | Side-score and low-confidence gating | partial/negative | Aggressive gates repair hard rows but hurt global quality; low deterministic score is not enough because wrong matches can look confident. |
@@ -48,9 +48,14 @@ Tried so far:
 | Direct text -> article classifier | negative | Hit@10 only `0.0395` on Gemma 200k. |
 | Text -> article-vector/query-vector distillation | weak positive | 3-cycle hit@10 around `0.28`, below BM25. |
 | Cached query embedding -> article classifier | strong but different runtime | Hit@10 `0.9377`, hit@50 `0.9819`; proves query embeddings contain learnable address signal, but still requires query embeddings at runtime. |
+| Frozen local embedders | mixed, e5 view positive | MiniLM was weak; `intfloat/multilingual-e5-small` over Refmark-generated views reached article hit@10 `0.7272` and 50-article area top-5 `0.8873` without Qwen/OpenRouter at runtime. |
+| Local embedding router -> BM25 resolver | positive but coarse | On the 3-cycle stress split, e5/refmark-view area routing plus BM25/fusion inside the area union improved hit@10 from `0.6289` to `0.6995`, but the best setting searched about `979` candidate articles; a smaller `250`-article union reached `0.6947`. |
+| Embedder comparison loop | active | `summarize_bgb_embedding_stack_reports.py` compares stack reports. Nomic v1.5 d256 underperformed e5-small on BGB because German routing was weak; Jina base-de hit a local `transformers.onnx` dependency issue; large Mixedbread models downloaded but were too slow for this CPU loop without resumable/longer runs. |
 | Global query reformulator | negative/weak | Naive append learned magnet terms and hurt BM25; discriminative fusion only nudged hit@10 from `0.5900` to `0.5917`. |
 | 10-article oracle reformulation | promising | Learned term bank improved hit@10 from `0.6207` to `0.6897`; per-query oracle reached `0.8966`. |
 | Tiny oracle-term predictor | promising on tiny slice | 129k params / 0.54 MB; predicted append matched `0.6897` hit@10 and improved MRR from `0.4669` to `0.5969`. |
+| Surface-conditioned reformulator | modest positive | No-leak 32-article run improved BM25 MRR `0.4424 -> 0.4564` and hit@10 `0.6122 -> 0.6226`; oracle-label 12-article run improved MRR `0.4978 -> 0.5299`. |
+| Cross-cycle intent-surface transfer | modest positive | Cycle1 deterministic/article-only LLM signatures are near-neutral on cycle2 and improve harder Gemma cycle3 from about `0.356` to `0.371-0.372` hit@10. |
 
 Not tried yet or only lightly touched:
 
@@ -173,6 +178,76 @@ locally while loading the existing large embedding cache. That is an
 implementation bottleneck, not a negative retrieval result. The next comparison
 should use a compact vector store or memory-mapped cache before making a stress
 claim about embeddings/hybrids.
+
+### Local Embedding Router Plus BM25 Resolver
+
+`evaluate_bgb_embedding_area_bm25_stack.py` now evaluates the concrete staged
+shape:
+
+```text
+query -> local e5 embedding over Refmark views -> candidate article areas
+      -> BM25/signature resolver inside the area union
+      -> optional BM25/e5 reciprocal-rank fusion inside that union
+```
+
+This is not a pure no-embedding runtime, but it is much lighter than a remote
+embedding/vector-store stack and keeps the final evidence target in Refmark
+article refs.
+
+On the 3-cycle 200k stress split (`5,810` held-out rows; concern/adversarial
+only), flat no-embedding BM25/signature search reached hit@10 `0.6289`,
+hit@50 `0.7886`. The best local e5 area-router + inside-area fusion reached
+hit@10 `0.6995`, hit@50 `0.8587`, with top-10 `100`-article areas. That union
+contains about `979` candidate articles, so the highest number is still coarse.
+A more practical top-10 `25`-article setup searched about `250` articles and
+reached hit@10 `0.6947`, hit@50 `0.8408`.
+
+Style split for the best 3-cycle setting:
+
+| Style | flat BM25 hit@10 | stack hit@10 | flat BM25 hit@50 | stack hit@50 |
+| --- | ---: | ---: | ---: | ---: |
+| concern | 0.6116 | 0.6899 | 0.7759 | 0.8556 |
+| adversarial | 0.6463 | 0.7091 | 0.8014 | 0.8618 |
+
+On the older mixed 32x5 split (`477` held-out rows; direct/concern/adversarial),
+the best stack setting was top-10 `50`-article areas: hit@10 `0.7631`,
+hit@50 `0.8826`, versus flat BM25 hit@10 `0.6771`, hit@50 `0.8029`.
+
+| Style | flat BM25 hit@10 | stack hit@10 | flat BM25 hit@50 | stack hit@50 |
+| --- | ---: | ---: | ---: | ---: |
+| direct | 0.9273 | 0.9576 | 0.9758 | 1.0000 |
+| concern | 0.6139 | 0.7152 | 0.7532 | 0.8418 |
+| adversarial | 0.4740 | 0.6039 | 0.6688 | 0.7987 |
+
+Interpretation: embeddings are more useful here as a coarse semantic router
+than as the final exact article scorer. When lexical search misses, it often
+misses outside the local neighborhood; the embedding router can pull the final
+BM25 resolver into a better part of the corpus. The remaining weakness is
+candidate width: the reliable setting is still hundreds of articles, not a tiny
+browser-side local box.
+
+The evaluator now supports `--trust-remote-code`, Matryoshka-style
+`--truncate-dim`, model-specific query/document prefixes, and chunked resumable
+embedding caches. `summarize_bgb_embedding_stack_reports.py` prints compact
+comparison tables for multiple reports.
+
+First additional embedder probe on the mixed 32x5 split:
+
+| Embedder | Dim | direct article hit@10 | best stack hit@10 | best stack hit@50 | DE stack hit@10 | EN stack hit@10 | Note |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `intfloat/multilingual-e5-small` | 384 | 0.6709 | 0.7631 | 0.8826 | 0.7200 | 0.8106 | Current local baseline. |
+| `nomic-ai/nomic-embed-text-v1.5` d256 | 256 | 0.4990 | 0.6667 | 0.8071 | 0.5760 | 0.7665 | Strong English skew; not a good BGB German router. |
+
+Operational notes:
+
+- `jinaai/jina-embeddings-v2-base-de` did not load with the current local
+  Transformers install because the remote Jina code imports `transformers.onnx`.
+- `mixedbread-ai/deepset-mxbai-embed-de-large-v1` downloaded about `946 MiB`
+  and timed out on the first full CPU encode before a report.
+- `mixedbread-ai/mxbai-embed-large-v1` downloaded about `640 MiB` and also
+  timed out on this CPU loop.
+- These are still plausible teacher candidates, but should be rerun on the
+  larger GPU machine or as long resumable jobs.
 
 ### 200k-Token Stress Cycles
 
@@ -327,6 +402,38 @@ hard rows. The next gating shape should probably be confidence/heatmap-aware:
 use LLM signatures as a rescue/candidate-expansion path when baseline retrieval
 has weak lexical confidence or repeated known confusion, not as a uniformly
 weighted side index.
+
+Important provenance fix: the first LLM-signature cache key used only
+`article_hash + model + signature_limit`, while the prompt also included
+held-out-safe train-query snippets. That meant a later experiment could reuse
+signatures generated with a different split or question context. The cache key
+now includes the article text budget and train-query context. The huge
+same-distribution `bgb_llm_intent_signatures_hard40_qwen_turbo_index` numbers
+should be treated as a useful upper-bound/bug-finding artifact, not as a clean
+transfer claim.
+
+After that fix, we ran a cleaner portability check:
+
+1. Build a heatmap from cycle1 only.
+2. Generate Qwen Turbo article-text-only signatures for the 40 hardest cycle1
+   articles (`--max-train-queries 0`).
+3. Combine those with cycle1 deterministic signatures.
+4. Evaluate against cycle2 and cycle3 without regenerating metadata.
+
+| Adapted index | Eval set | Baseline hit@10 | Adapted hit@10 | Baseline hit@100 | Adapted hit@100 | MRR delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| cycle1 deterministic signatures | cycle1 held-out | 0.7241 | 0.7340 | 0.9012 | 0.9137 | -0.0045 |
+| cycle1 deterministic signatures | cycle2 | 0.6885 | 0.6869 | 0.8570 | 0.8687 | -0.0013 |
+| cycle1 deterministic signatures | cycle3 | 0.3561 | 0.3718 | 0.6531 | 0.6840 | +0.0167 |
+| cycle1 deterministic + article-only Qwen hard40 | cycle1 held-out | 0.7241 | 0.7325 | 0.9012 | 0.9132 | -0.0055 |
+| cycle1 deterministic + article-only Qwen hard40 | cycle2 | 0.6885 | 0.6890 | 0.8570 | 0.8693 | -0.0033 |
+| cycle1 deterministic + article-only Qwen hard40 | cycle3 | 0.3561 | 0.3707 | 0.6531 | 0.6824 | +0.0149 |
+
+This is much less dramatic than the earlier hard40 same-split artifact, but it
+is the more trustworthy result: compact intent metadata transfers a little,
+especially to the harder Gemma distribution, and tends to improve deep recall
+more than rank sharpness. That points toward confidence-aware candidate
+expansion rather than unconditional top-rank replacement.
 
 We then made that gating hypothesis explicit with
 `evaluate_bgb_signature_gating.py`. The tested gate uses deterministic
@@ -516,12 +623,21 @@ Latest scripts:
 - `examples/bgb_browser_search/train_bgb_query_reformulator.py`
 - `examples/bgb_browser_search/iterate_bgb_oracle_reformulation.py`
 - `examples/bgb_browser_search/train_bgb_oracle_reformulation_predictor.py`
+- `examples/bgb_browser_search/train_bgb_surface_reformulator.py`
+- `examples/bgb_browser_search/report_bgb_surface_recall.py`
 
 Latest reports:
 
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_query_reformulator_fusion_probe_report.json`
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_10articles_10iters.json`
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_predictor_10articles_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_reformulator_32x5_surface20_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_reformulator_12x_oracle_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_recall_32x5.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_article_static_adapt_32x5_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_article_static_adapt_cycle1_qwen_v2_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_recall_cycle2_with_cycle1_adapt.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_recall_cycle3_with_cycle1_adapt.json`
 
 Interpretation:
 
@@ -535,6 +651,51 @@ query -> coarse surface router -> local term predictor -> BM25/reranker -> Refma
 
 This is exactly where Refmark matters: we can measure whether each layer
 actually recovers the same evidence refs and identify where the ensemble fails.
+
+First no-leak surface-conditioned runs:
+
+| Run | Baseline | Best surface result | Interpretation |
+| --- | --- | --- | --- |
+| 32-article, article-term targets, surface-k 20 | BM25 hit@10 `0.6122`, MRR `0.4424` | fusion hit@10 `0.6226`, MRR `0.4564`, `2.78 MB` model | Valid but modest reranker/local-booster signal. |
+| 12-article, oracle-term targets, surface-k 20 | BM25 hit@10 `0.6554`, MRR `0.4978` | fusion hit@10 `0.6723`, MRR `0.5299`, `1.50 MB` model | Better labels help; coarse surface recall remains the ceiling. |
+
+One invalid intermediate result is intentionally excluded: an early evaluation
+path appended the gold article to the candidate surface when BM25 missed it.
+After removing that leakage, the gain shrank from apparently large to modest.
+That is a useful provenance lesson for this line of work.
+
+Surface recall is now measured separately. On the same 32x5 eval split:
+
+| Router | hit@5 | hit@10 | hit@20 | hit@50 | hit@100 | MRR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw article BM25 | 0.2138 | 0.2579 | 0.2914 | 0.3333 | 0.3627 | 0.1812 |
+| enriched article BM25 | 0.5283 | 0.6122 | 0.6792 | 0.7442 | 0.8008 | 0.4432 |
+| enriched article rerank | 0.5304 | 0.6038 | 0.6751 | 0.7379 | 0.7966 | 0.4438 |
+
+The important ceiling is visible: enriched BM25 has decent `hit@100` but only
+`hit@10` around `0.61`. Direct queries are mostly solved (`hit@10 0.9108`),
+while concern and adversarial wording are the bottleneck (`0.5394` and
+`0.3871`). This means the next useful work is improving the coarse router or
+adding a high-recall broad candidate path; local reformulation alone cannot
+recover articles absent from the surface.
+
+Held-out-safe train aliases can improve the router inside the same generated
+question slice, but they are not yet broadly portable:
+
+| Router check | Baseline | Adapted/alias result | Interpretation |
+| --- | --- | --- | --- |
+| 32x5 same-slice train aliases | hit@10 `0.6122`, hit@100 `0.8008`, MRR `0.4432` | hit@10 `0.8973`, hit@100 `0.9686`, MRR `0.7447` | Very strong within a small same-distribution slice. |
+| cycle1 aliases, cycle1 held-out | hit@10 `0.7241`, hit@100 `0.9012`, MRR `0.5257` | hit@10 `0.7445`, hit@100 `0.9157`, MRR `0.5364` | Small honest within-cycle gain. |
+| cycle1 aliases, cycle2 eval | hit@10 `0.6885`, hit@100 `0.8570`, MRR `0.4985` | hit@10 `0.6757`, hit@100 `0.8652`, MRR `0.4846` | Slightly broader recall, worse top-10/MRR. |
+| cycle1 aliases, cycle3 eval | hit@10 `0.3561`, hit@100 `0.6531`, MRR `0.2083` | hit@10 `0.3609`, hit@100 `0.6705`, MRR `0.2159` | Tiny positive transfer, still weak. |
+
+So the current conclusion is not "train aliases solve routing". It is:
+
+- article-level intent views are powerful when matched to the query
+  distribution;
+- naive train-question aliases overfit and can introduce wrong-top magnets;
+- the next useful router work should generate more durable article intent views
+  or train a confidence-aware broad router, then validate across cycles.
 
 ## Natural Query Judge Results
 
@@ -581,6 +742,9 @@ metric artifact.
 - Refmark BM25 is strong enough to be useful as a browser/local fallback.
 - Deterministic compressed intent signatures improved held-out static BM25 on
   the 3-cycle stress suite.
+- Clean cross-cycle intent-surface transfer is modest but real on the harder
+  Gemma cycle: cycle1 signatures moved hit@10 from `0.3561` to about `0.371`
+  and hit@100 from `0.6531` to about `0.683`.
 - Confusion-conditioned signatures helped selected hard-confusion rows when
   selected from a wide enough heatmap.
 - Curated concern aliases improved motivation-query localization when query
@@ -601,6 +765,9 @@ metric artifact.
   default; they need selection and gating.
 - Adapted-index split/provenance mismatch can create impressive but invalid
   numbers. Adapted indexes must record and match source reports plus split seed.
+- LLM-signature caches must include the prompt context, not just article hash
+  and model. Otherwise train-query snippets from a previous split can leak into
+  later experiments.
 - Article-level metrics are not meaningful for the BGB single-document setup.
 - DeepSeek v4-pro was too unstable through OpenRouter for unattended judging.
 - Deterministic generated-question benchmarks can overstate confidence if not
@@ -649,6 +816,188 @@ mostly moves the right evidence somewhere into top-k while making the first
 answer worse. The acceptance rule should be: keep a trained resolver only when
 it improves held-out evidence localization without violating coverage,
 undercitation, or overcitation gates.
+
+## Fresh BGB Retriever Loops
+
+Recent no-new-LLM loops focused on squeezing the static BGB retriever:
+
+| Experiment | Result | Interpretation |
+| --- | ---: | --- |
+| Raw train-question aliases on 32x5 slice | hit@10 `0.8700` | Looks strong but overfits local surfaces. |
+| Raw train-question aliases on 3-cycle heldout | hit@10 `0.2880` | Invalid as reusable static metadata. |
+| Base generated-view BM25 | hit@10 `0.5912` | Current lexical baseline over 5,810 held-out rows. |
+| Deterministic intent signatures | hit@10 `0.6250` | Real compact-metadata lift. |
+| Confusion signatures | hit@10 `0.6289` | Small additional repair. |
+| Cycle1 signatures blended into later cycles | hit@10 `0.5297 -> 0.5525` | Cleaner transfer lift, but smaller. |
+| BM25 parameter grid | `0.6289` default vs `0.6287` sampled best | `k1`/`b` tuning is not the missing lever. |
+| Confusion-pair booster | hit@10 `0.6289 -> 0.6315`, MRR `0.4363 -> 0.4228` | Memorized wrong-top -> gold pairs overfit train and hurt rank quality. |
+| 50-article hard area router | hit@10 `0.6059` with top 8 areas | Coarse routing as a hard gate loses too much gold. |
+| 50-article soft area prior | hit@10 `0.6289 -> 0.6456`, MRR `0.4363 -> 0.4026` | Useful for candidate lists, harmful for direct jump confidence. |
+| Tiny text query -> 51-area classifier | top-1 `0.3024`, top-5 `0.6477`, top-8 `0.7461` | Plain text student overfits train and does not meet area-router bar. |
+| Cached Qwen3 query embedding -> 51-area head | top-1 `0.7609`, top-2 `0.8988`, top-3 `0.9435`, top-5 `0.9726` | Area concept is learnable with embedding signal; one-area `0.9` is not reached, two-area routing is nearly there. |
+| Cached Qwen3 query embedding -> 17-area compressed heads | best top-1 `0.8102`, top-2 `0.9308`, top-5 `0.9869` | At coarser ~150-article areas, embedding-space routing becomes practical; PCA-128 MLP still reaches top-2 `0.8971`, top-5 `0.9806`. |
+
+The more interesting application metric is local-neighborhood recovery. With
+the confusion-signature index on the same held-out split:
+
+| Accepted article window | hit@1 | hit@10 | hit@50 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| exact article only | 0.3389 | 0.6289 | 0.7886 | 0.4363 |
+| +/-1 article | 0.3852 | 0.6998 | 0.8547 | 0.4908 |
+| +/-2 articles | 0.4108 | 0.7387 | 0.8900 | 0.5204 |
+| +/-5 articles | 0.4525 | 0.7928 | 0.9330 | 0.5680 |
+
+This is not a license to weaken evaluation targets. It suggests a practical UI
+shape: exact refs remain the scoreable gold target, but a browser/search
+surface can safely show tight neighboring clusters when direct-jump confidence
+is low.
+
+The coarse-to-fine experiment sharpens that point. Sliding article windows can
+help as a soft "legal neighborhood" prior, but not as a hard filter yet. The
+next area-structuring attempts should optimize area recall before precision:
+native BGB headings, overlapping windows tuned by heatmap misses, or
+embedding/teacher-shaped areas are more plausible than a single flat sliding
+window size.
+
+The explicit 51-area classifier makes the bar clear. If the requirement is
+"select exactly one of ~50 areas with 0.9 held-out accuracy," the current local
+text model is nowhere close and the embedding head still falls short at
+`0.7609`. If the requirement is "select a tiny area set, about two to three
+areas, then refine inside it," cached embeddings already clear the practical
+recall target (`0.8988` top-2, `0.9435` top-3). That suggests the next viable
+loop is not blind boundary shifting; it is:
+
+```text
+embedding/teacher area router -> inspect stable top-2 confusions
+  -> merge/split/overlap only the repeated confusion areas
+  -> train article/ref resolver inside top-2/top-3 area union
+```
+
+The 17-area run tests the user's coarser version of that idea: split the full
+BGB into about 150-article areas, then try to reduce the embedding signal. On
+`5,810` held-out questions, full 4096-d cached Qwen3 query embeddings plus a
+small MLP head reached top-1 `0.8036`, top-2 `0.9313`, and top-5 `0.9855`.
+PCA to 1024 dimensions was slightly better at top-1 `0.8102`; PCA-256 still
+kept top-2 `0.9127`, top-3 `0.9563`, and top-5 `0.9843` with a 105k-param
+head. Even a PCA-128 head kept top-2 `0.8971` and top-5 `0.9806`.
+
+Prototype/centroid routers are much smaller but less precise. PCA-128 with
+int8 centroids needs only about `2.2 KB` for the centroid table and reached
+top-1 `0.6243`, top-2 `0.8067`, and top-5 `0.9473`. This is a useful fallback
+or candidate-prior layer, not a direct-jump layer. Size estimates for PCA heads
+exclude the projection matrix; a 4096x128 FP32 PCA matrix is about `2.0 MB`
+before quantization. Random projections can be regenerated from a seed, but
+they still assume a 4096-d query embedding exists at runtime.
+
+An area-size sweep gives the current hierarchy curve:
+
+| Area size | Area count | best top-1 | best top-2 | best top-5 | PCA-128 MLP top-2 | PCA-128 int8 centroid top-5 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 75 articles | 34 | 0.7404 | 0.8861 | 0.9742 | 0.8353 | 0.9117 |
+| 100 articles | 26 | 0.7792 | 0.9081 | 0.9812 | 0.8769 | 0.9231 |
+| 150 articles | 17 | 0.8102 | 0.9308 | 0.9869 | 0.8971 | 0.9473 |
+| 200 articles | 13 | 0.8138 | 0.9379 | 0.9898 | 0.9081 | 0.9571 |
+| 300 articles | 9 | 0.8401 | 0.9513 | 0.9950 | 0.9301 | 0.9776 |
+
+Interpretation: if a query-embedding signal is available, the coarse area layer
+can cheaply reduce the full BGB to a two-area or three-area surface with high
+recall. That is enough to justify a hierarchical follow-up experiment. It does
+not prove the offline text-only browser model yet; it gives a clear teacher
+target for one.
+
+The 9-area reducer sweep then asked a narrower question: can dimension
+reduction, shuffled coordinate selection, or quantization raise the coarse
+selection ceiling? On this run, no reduced representation beat the full
+4096-d embedding head, but several retained most of the signal:
+
+| Reducer / router | dims | top-1 | top-2 | top-3 | top-5 | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| full embedding + MLP | 4096 | 0.8353 | 0.9465 | 0.9781 | 0.9964 | Highest ceiling in the reducer sweep. |
+| PCA + MLP | 512 | 0.8277 | 0.9427 | 0.9766 | 0.9950 | Nearly full quality, but needs an 8 MB FP32 projection matrix before quantization. |
+| PCA + MLP | 256 | 0.8096 | 0.9334 | 0.9733 | 0.9936 | Strong balance; 409k-param FP32 head plus 4 MB FP32 projection. |
+| PCA + MLP | 128 | 0.7869 | 0.9255 | 0.9694 | 0.9936 | 212k-param FP32 head plus 2 MB FP32 projection. |
+| PCA + MLP | 64 | 0.7554 | 0.9098 | 0.9623 | 0.9914 | Still a useful coarse reducer. |
+| PCA + MLP | 16 | 0.6606 | 0.8501 | 0.9227 | 0.9807 | Tiny head, surprisingly good top-5. |
+| PCA int8 centroid | 128 | 0.6747 | 0.8437 | 0.9189 | 0.9773 | About 1.1 KB centroid table, projection excluded. |
+| PCA int8 centroid | 16 | 0.6138 | 0.7957 | 0.8850 | 0.9668 | About 144 bytes centroid table, projection excluded. |
+
+Random projections and random coordinate samples did not discover a higher
+ceiling, but they were not useless. Best 512-d random coordinate samples reached
+about top-1 `0.80`, top-2 `0.93`, and top-5 `0.993`, close to PCA-256/512.
+That suggests the Qwen3 embedding area signal is distributed broadly rather
+than hiding in a tiny fixed coordinate set. Int8 centroid quantization was
+nearly lossless for this coarse task; the main remaining size question is the
+projection/input embedding model, not the centroid table.
+
+The next sweep extended granularity down to 5-article areas and compared
+full embeddings with PCA-128 and PCA-256 heads:
+
+| Area size | Area count | full top-2 | full top-5 | PCA-128 top-2 | PCA-128 top-5 | PCA-256 top-2 | PCA-256 top-5 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 articles | 506 | 0.8019 | 0.9153 | 0.7477 | 0.8902 | 0.7575 | 0.8924 |
+| 10 articles | 253 | 0.8090 | 0.9324 | 0.7454 | 0.8914 | 0.7547 | 0.9002 |
+| 25 articles | 102 | 0.8444 | 0.9511 | 0.7744 | 0.9236 | 0.8007 | 0.9343 |
+| 50 articles | 51 | 0.8919 | 0.9697 | 0.8408 | 0.9525 | 0.8616 | 0.9594 |
+| 100 articles | 26 | 0.9134 | 0.9821 | 0.8831 | 0.9714 | 0.9007 | 0.9757 |
+| 150 articles | 17 | 0.9313 | 0.9855 | 0.8985 | 0.9809 | 0.9115 | 0.9840 |
+| 300 articles | 9 | 0.9530 | 0.9947 | 0.9308 | 0.9924 | 0.9422 | 0.9948 |
+
+This is encouraging for compressed neighborhood routing. Even at 506
+five-article areas, PCA-128/256 top-5 stays around `0.89`; at 102 areas,
+PCA-256 top-5 reaches `0.9343`. But the exact top-1/top-2 gap remains real:
+compressed vectors are plausible as first-stage candidate generators, not as a
+complete replacement for full embeddings or a fine resolver.
+
+### Frozen Local Embedder Baseline
+
+We then tested the obvious non-Qwen runtime path: use an off-the-shelf local
+SentenceTransformer encoder directly, without distilling Qwen. This required
+installing `sentence-transformers`; pip upgraded Hugging Face packages and
+reported a version conflict with `aider-chat`, so this environment change
+should be repeated in a separate venv for cleaner future runs.
+
+Models tested:
+
+- `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- `intfloat/multilingual-e5-small`
+
+The e5 model was tested with source text, generated Refmark retrieval views,
+and combined source+view text. The best frozen local path was e5 over
+`refmark_view` only:
+
+| Model / indexed text | article hit@10 | article hit@50 | DE article hit@10 | EN article hit@10 | area25 top-5 | area50 top-5 | area100 top-5 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| MiniLM, combined | 0.3360 | 0.5391 | 0.3232 | 0.3483 | 0.5561 | 0.6515 | 0.7613 |
+| e5-small, source | 0.5077 | 0.7003 | 0.6814 | 0.3399 | 0.6539 | 0.7243 | 0.8036 |
+| e5-small, combined | 0.6069 | 0.7566 | 0.7416 | 0.4766 | 0.7668 | 0.8320 | 0.8912 |
+| e5-small, Refmark view | 0.7272 | 0.8818 | 0.7115 | 0.7424 | 0.8391 | 0.8873 | 0.9263 |
+
+The generated bilingual Refmark view is doing real work here. Source-only e5 is
+strong in German but weak in English; view-only e5 balances both languages and
+beats the current static BM25/refmark-view lexical baseline on article hit@10.
+It is still below Qwen3 embeddings and below the Qwen-compressed teacher, but
+it removes Qwen/OpenRouter from runtime.
+
+Best e5-small Refmark-view split:
+
+| Target | all top-5 | concern top-5 | adversarial top-5 | DE top-5 | EN top-5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| article | 0.6460 | 0.6393 | 0.6525 | 0.6268 | 0.6645 |
+| 5-article area | 0.7305 | 0.7297 | 0.7312 | 0.7265 | 0.7343 |
+| 25-article area | 0.8391 | 0.8444 | 0.8338 | 0.8365 | 0.8416 |
+| 50-article area | 0.8873 | 0.8947 | 0.8800 | 0.8841 | 0.8903 |
+| 100-article area | 0.9263 | 0.9331 | 0.9196 | 0.9198 | 0.9326 |
+
+Interpretation: frozen local e5 is not a direct replacement for Qwen-quality
+semantic retrieval. It is, however, a serious no-Qwen runtime candidate for
+coarse neighborhood generation, especially when the corpus is first converted
+into compact multilingual Refmark retrieval views. The next low-cost step is a
+hybrid local route:
+
+```text
+e5-small over Refmark views -> top neighborhoods
+BM25 / local reranker inside neighborhoods -> exact article/ref
+```
 
 ## Mixed Target Evidence
 

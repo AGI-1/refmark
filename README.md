@@ -169,6 +169,7 @@ To build and use a region manifest in a simple retrieval or review pipeline:
 ```bash
 python -m refmark.cli map docs/policy.md -o .refmark/policy_manifest.jsonl --marked-dir .refmark/marked
 python -m refmark.cli expand .refmark/policy_manifest.jsonl --refs P03 --before 1 --after 1
+python -m refmark.cli pack-context .refmark/policy_manifest.jsonl --refs P03 --format text
 python -m refmark.cli align old_policy.docx new_policy.pdf --top-k 2 --coverage-html coverage_review.html
 ```
 
@@ -186,7 +187,7 @@ or hits that contain refs.
 ```python
 from refmark import CorpusMap, EvalExample, EvalSuite
 
-corpus = CorpusMap.from_manifest(".refmark/policy_manifest.jsonl")
+corpus = CorpusMap.from_manifest(".refmark/policy_manifest.jsonl", revision_id="git:abc123")
 suite = EvalSuite(
     corpus=corpus,
     examples=[
@@ -204,6 +205,20 @@ def my_retriever(query: str):
 run = suite.evaluate(my_retriever, k=5)
 print(run.metrics)
 print([item.to_dict() for item in suite.stale_examples()])
+```
+
+The map can live outside the source document. Treat it like a shadow manifest
+for one source revision: rebuild it after an update, diff it against the
+previous map, then keep eval/training rows whose refs are unchanged and
+regenerate only rows that point at changed or removed regions.
+
+```python
+previous = CorpusMap.from_manifest(".refmark/policy_manifest.rev-a.jsonl", revision_id="rev-a")
+current = CorpusMap.from_manifest(".refmark/policy_manifest.rev-b.jsonl", revision_id="rev-b")
+
+diff = current.diff_revision(previous)
+print(diff.to_dict())
+print([item.to_dict() for item in diff.stale_examples(suite.examples)])
 ```
 
 For JSONL eval suites:
@@ -235,6 +250,43 @@ runs = suite.compare(
 for name, run in runs.items():
     run.write_json(f"runs/{name}.json")
     print(name, run.metrics)
+```
+
+To use the CLI as a CI gate, keep the search index as the retriever artifact and
+optionally provide the current manifest as the lifecycle/staleness artifact:
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest .refmark/policy_manifest.jsonl \
+  --top-k 10 \
+  --min-hit-at-k 0.80 \
+  --max-stale 0 \
+  --fail-on-regression \
+  -o runs/eval.json
+```
+
+To score an existing retrieval service instead of the built-in BM25 index, pass
+an endpoint that accepts `{"query": "...", "top_k": 10}` and returns either
+`{"refs": ["policy:P13"]}` or `{"hits": [{"stable_ref": "policy:P13", "score": 0.9}]}`:
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --retriever-endpoint http://localhost:8000/retrieve \
+  --min-hit-at-k 0.80 \
+  --fail-on-regression
+```
+
+For batch/offline systems, export one JSONL row per query and score it without
+running a service:
+
+```jsonl
+{"query":"Which clause says expedited shipping is non-refundable?","hits":[{"stable_ref":"policy:P13","score":0.91}]}
+```
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --retriever-results exported_hits.jsonl \
+  --min-hit-at-k 0.80
 ```
 
 Retriever outputs can be plain stable refs, dictionaries, or small objects:
@@ -278,6 +330,25 @@ retrieval settings hashes, stale-ref validation, hard-ref/confusion heatmaps,
 and score-margin confidence gates. That is the core evidence pipeline: compare
 retrieval variants by whether they recover the right refs/ranges, then adapt
 the hard zones instead of guessing from answer prose.
+
+Recent example work adds the next visible layer of that loop: an evidence
+heatmap/workbench for a FastAPI documentation corpus. It groups regions by the
+existing documentation hierarchy, colors weak and strong retrieval areas,
+highlights matching sections by search term, and pins per-block refs, metrics,
+and eval questions for review. The heatmap is not a separate product claim; it
+is the UI for the same corpus-as-test-suite idea:
+
+```text
+evaluate -> heatmap hard zones -> reviewer/agent diagnosis
+         -> question or metadata adaptation -> affected-row mini-eval
+         -> refreshed report/heatmap
+```
+
+The current adaptation loop can propose validation repairs, alternate gold
+refs, range extension/splitting, exclusions for query magnets, confusion
+mapping, and retrieval-only Doc2Query metadata stored beside refs as shadow
+metadata. Reports should keep non-adaptive baselines visible so improvements
+remain measurable instead of becoming folklore.
 
 For a browser-only page search, load `refmark/browser_search.js` and the
 exported browser index. Elements with `data-refmark-ref="doc:P03"` can be

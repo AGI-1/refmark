@@ -78,7 +78,15 @@ def main() -> None:
             region
             for ref in selected_refs
             if (region := regions_by_ref.get(ref)) is not None
-            and cache_key(region, model=args.model, signature_limit=args.signature_limit) not in cache
+            and cache_key(
+                region,
+                train_by_ref.get(ref, []),
+                model=args.model,
+                signature_limit=args.signature_limit,
+                max_train_queries=args.max_train_queries,
+                max_article_chars=args.max_article_chars,
+            )
+            not in cache
         ]
         generated = generate_missing(
             missing,
@@ -90,7 +98,16 @@ def main() -> None:
         for row in generated:
             cache[row["cache_key"]] = row
 
-    llm_signatures = signatures_from_cache(cache, selected_refs, regions_by_ref, model=args.model, signature_limit=args.signature_limit)
+    llm_signatures = signatures_from_cache(
+        cache,
+        selected_refs,
+        regions_by_ref,
+        train_by_ref=train_by_ref,
+        model=args.model,
+        signature_limit=args.signature_limit,
+        max_train_queries=args.max_train_queries,
+        max_article_chars=args.max_article_chars,
+    )
     deterministic_signatures = build_signatures(
         train_questions,
         signature_limit=args.signature_limit,
@@ -179,7 +196,15 @@ def generate_missing(
     def one(region: SearchRegion) -> dict[str, object] | None:
         try:
             signatures = generate_signatures(region, train_by_ref.get(region.stable_ref, []), args=args, api_key=api_key)
-            return cache_row(region, signatures, model=args.model, signature_limit=args.signature_limit)
+            return cache_row(
+                region,
+                train_by_ref.get(region.stable_ref, []),
+                signatures,
+                model=args.model,
+                signature_limit=args.signature_limit,
+                max_train_queries=args.max_train_queries,
+                max_article_chars=args.max_article_chars,
+            )
         except Exception as exc:
             print(f"signature generation failed: {region.stable_ref}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return None
@@ -305,30 +330,69 @@ def api_key(env_name: str) -> str:
     return value
 
 
-def cache_key(region: SearchRegion, *, model: str, signature_limit: int) -> str:
+def cache_key(
+    region: SearchRegion,
+    train_questions: list[StressQuestion],
+    *,
+    model: str,
+    signature_limit: int,
+    max_train_queries: int,
+    max_article_chars: int,
+) -> str:
     raw = json.dumps(
         {
             "prompt_version": PROMPT_VERSION,
             "article_ref": region.stable_ref,
             "article_hash": region.hash,
+            "article_text_prefix_hash": hashlib.sha256(region.text[:max_article_chars].encode("utf-8")).hexdigest()[:16],
+            "train_query_context": [
+                {
+                    "language": row.language,
+                    "style": row.style,
+                    "query": row.query,
+                }
+                for row in train_questions[:max_train_queries]
+            ],
             "model": model,
             "signature_limit": signature_limit,
+            "max_train_queries": max_train_queries,
+            "max_article_chars": max_article_chars,
         },
         sort_keys=True,
+        ensure_ascii=False,
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def cache_row(region: SearchRegion, signatures: list[str], *, model: str, signature_limit: int) -> dict[str, object]:
+def cache_row(
+    region: SearchRegion,
+    train_questions: list[StressQuestion],
+    signatures: list[str],
+    *,
+    model: str,
+    signature_limit: int,
+    max_train_queries: int,
+    max_article_chars: int,
+) -> dict[str, object]:
+    key = cache_key(
+        region,
+        train_questions,
+        model=model,
+        signature_limit=signature_limit,
+        max_train_queries=max_train_queries,
+        max_article_chars=max_article_chars,
+    )
     return {
         "schema": "refmark.bgb_llm_intent_signature_cache.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "prompt_version": PROMPT_VERSION,
-        "cache_key": cache_key(region, model=model, signature_limit=signature_limit),
+        "cache_key": key,
         "article_ref": region.stable_ref,
         "article_hash": region.hash,
         "model": model,
         "signature_limit": signature_limit,
+        "max_train_queries": max_train_queries,
+        "max_article_chars": max_article_chars,
         "signatures": signatures,
     }
 
@@ -359,15 +423,25 @@ def signatures_from_cache(
     selected_refs: list[str],
     regions_by_ref: dict[str, SearchRegion],
     *,
+    train_by_ref: dict[str, list[StressQuestion]],
     model: str,
     signature_limit: int,
+    max_train_queries: int,
+    max_article_chars: int,
 ) -> dict[str, list[str]]:
     output: dict[str, list[str]] = {}
     for ref in selected_refs:
         region = regions_by_ref.get(ref)
         if not region:
             continue
-        key = cache_key(region, model=model, signature_limit=signature_limit)
+        key = cache_key(
+            region,
+            train_by_ref.get(ref, []),
+            model=model,
+            signature_limit=signature_limit,
+            max_train_queries=max_train_queries,
+            max_article_chars=max_article_chars,
+        )
         row = cache.get(key)
         if not row:
             continue

@@ -13,6 +13,7 @@ python examples/judge_free_rewards/run.py
 python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
+python examples/docs_navigation_pipeline/run.py
 python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
 python examples/rag_retrieval_benchmark/run.py
 ```
@@ -90,6 +91,21 @@ Refmark regions.
 This is the "corpus plus cheap LLM becomes searchable corpus" path. The build
 step can use a cheap model once; query-time search needs no API, embeddings,
 GPU, vector database, or server.
+
+## Documentation Navigation Pipeline
+
+`docs_navigation_pipeline` is the frozen small end-to-end recipe for software
+documentation navigation:
+
+1. map Markdown docs into a region manifest
+2. build a local portable index
+3. export a browser-search payload
+4. evaluate query -> gold-ref examples against the index
+5. run a free-text navigation query that returns stable refs and snippets
+
+It intentionally avoids vector databases and runtime model calls. Larger
+comparisons against embeddings or hosted retrievers can still be scored through
+`eval-index --retriever-results`.
 
 ## Browser Page Search
 

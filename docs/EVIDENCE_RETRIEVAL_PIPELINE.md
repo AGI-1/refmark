@@ -16,6 +16,41 @@ Because the target is a ref or range, the same suite can compare BM25,
 generated retrieval views, embeddings, rerankers, context expansion, and a
 corpus-specific trained resolver.
 
+## Revisioned Shadow Maps
+
+A refmark map does not need to be embedded back into the source document. For
+retrieval and evaluation pipelines it is often cleaner to keep an external
+manifest beside the corpus, tied to a concrete source revision:
+
+```text
+source revision A -> corpus.refmark.rev-a.jsonl -> eval rows with source hashes
+source revision B -> corpus.refmark.rev-b.jsonl -> diff against revision A
+```
+
+That external map is the document/corpus version of shadow mode. The source
+stays unchanged, while the manifest gives every region a stable address and a
+content hash. On update, `CorpusMap.diff_revision(previous)` reports added,
+removed, changed, and unchanged refs. Examples that point at changed or removed
+refs are stale; examples that point only at unchanged refs can survive the
+revision without re-generation.
+
+This is the pipeline interface Refmark should make easy to adopt in pieces:
+
+```python
+from refmark import CorpusMap, EvalSuite
+
+previous = CorpusMap.from_manifest("corpus.refmark.rev-a.jsonl", revision_id="rev-a")
+current = CorpusMap.from_manifest("corpus.refmark.rev-b.jsonl", revision_id="rev-b")
+suite = EvalSuite.from_jsonl("eval_questions.jsonl", corpus=current)
+
+revision_diff = current.diff_revision(previous)
+stale_rows = revision_diff.stale_examples(suite.examples)
+```
+
+Downstream systems can use the whole loop or only one piece: manifest creation,
+ref/range validation, stale-row detection, retriever comparison, context
+packing, citation scoring, or human review.
+
 The next loop is documented in `docs/DISCOVERY_ADAPT_LOOP.md`:
 
 ```text
@@ -91,7 +126,18 @@ The generic `eval-index` CLI now emits the first portable subset of this shape:
 - self-checking provenance for the search index, eval JSONL, and retrieval
   settings;
 - stale-ref validation against source hashes;
+- optional external manifest validation through `--manifest`, so retrieval
+  artifacts and corpus lifecycle artifacts can evolve independently;
+- optional HTTP retriever scoring through `--retriever-endpoint`, so existing
+  search services can be evaluated without rewriting them in Python;
+- optional offline retriever scoring through `--retriever-results`, so exported
+  hits from batch jobs or vector databases can be scored without running a
+  service;
+- CI gates through `--min-hit-at-k`, `--min-hit-at-1`, `--min-mrr`,
+  `--min-gold-coverage`, `--max-stale`, and `--fail-on-regression`;
 - hard-ref and confusion heatmaps;
+- per-target-shape summaries in `diagnostics.by_gold_mode` for single-region,
+  contiguous-range, and distributed-ref examples;
 - score-margin selective-jump diagnostics;
 - first-pass adaptation recommendations derived from repeated misses and
   confusions.
@@ -111,10 +157,107 @@ Did a corpus update invalidate any examples or signatures?
 Did this index use the same split/provenance as the benchmark I am reading?
 ```
 
+## Adaptation Toolkit
+
+The heatmap should not imply that every weak block needs the same fix. The
+adapt loop should classify a weak area, then apply the smallest safe
+adaptation. Current agent-assisted experiments auto-apply only question
+rewrites; all corpus-boundary and exclusion changes are emitted as a plan for
+review.
+
+| Symptom | Adaptation | Effect |
+| --- | --- | --- |
+| Query asks for a different section than its gold refs | Regenerate or rewrite the eval question | Fixes validation drift without changing the corpus. |
+| Retrieved competing ref is also valid evidence | Add alternate gold refs/ranges | Converts false failures into multi-positive evidence labels. |
+| Retrieved neighbor is consistently needed for coverage | Extend the gold range | Makes range labels reflect the evidence needed in practice. |
+| Gold range contains multiple topics | Split the range | Improves granularity and avoids one question representing a broad section. |
+| Adjacent or duplicate sections behave as one concept | Merge or link regions | Records equivalent/related evidence units instead of repeatedly penalizing overlap. |
+| TOC/index/release/hub sections attract broad queries | Mark as excluded, hub, ledger, or query magnet | Keeps them visible for corpus QA while excluding them from default search. |
+| Gold ref repeatedly ranks below the same wrong top ref | Record a confusion pair | Creates evidence for hard negatives, disambiguating signatures, or section-linking. |
+| Question and gold are valid but ranking is weak | Tune retriever/reranker/context policy | Keeps the eval row hard and improves the search stack instead. |
+
+This turns adaptation into an auditable corpus-maintenance loop:
+
+```text
+evaluate -> weakest refs/confusions -> classify cause -> plan adaptation
+         -> apply safe changes -> rerun -> preserve provenance
+```
+
+For agent-assisted adaptation, use a tighter affected-row loop before writing
+anything durable:
+
+```text
+weak area
+  -> reviewer proposes question/metadata/range adaptations
+  -> build candidate changes in memory
+  -> run mini-eval only for rows whose stable refs are affected
+  -> accept if hit@k, hit@1, MRR, and coverage do not regress
+  -> write accepted question edits and shadow metadata
+  -> refresh the full report/heatmap as final verification
+```
+
+The mini-eval is intentionally cheap. A typical section has only a couple of
+questions, so validating a candidate rewrite usually means a handful of local
+retrieval calls. Full-suite reruns remain useful as the final guardrail because
+adaptive embedding caches and cross-section metadata can have global effects.
+
+The FastAPI heatmap experiment writes this richer plan to
+`question_improvement_agent_report.json`. The plan distinguishes validation
+repairs, gold/range changes, region-boundary changes, exclusions, confusion
+mapping, retriever tuning, and valid hard cases.
+
+Adaptive Doc2Query metadata is stored as shadow metadata, not inserted into the
+source corpus. This lets a registry attach search-facing aliases,
+disambiguators, roles, and confusion edges to refs/ranges while preserving the
+original document text. Retrieval modes may consume this metadata by default,
+while reports should keep explicit non-adaptive baselines so improvements or
+regressions remain visible.
+
+Example CI command:
+
+```bash
+python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest corpus.refmark.jsonl \
+  --top-k 10 \
+  --min-hit-at-k 0.80 \
+  --max-stale 0 \
+  --fail-on-regression \
+  -o runs/eval.json
+```
+
 This also gives a clean acceptance test for future retrieval variants. A method
 that improves hit@10 while increasing wrong high-confidence jumps may be worse
 for a browser-navigation UI; a method that preserves high-precision jumps and
 improves fallback candidate recall is more useful.
+
+## Frozen No-Infra Docs Navigation Example
+
+The smallest ready pipeline is `examples/docs_navigation_pipeline`:
+
+```bash
+python examples/docs_navigation_pipeline/run.py
+```
+
+It uses a small English software-documentation corpus and writes:
+
+- `corpus.refmark.jsonl`: external/shadow region manifest;
+- `sections.json`: heading/TOC map from human labels to ref ranges;
+- `docs.index.json`: portable local BM25 index;
+- `docs.browser.json`: compact browser-search payload;
+- `eval_*.json`: evidence-evaluation reports for flat, hierarchical, and
+  reranked local search;
+- `sample_query.json`: free-text query hits with stable refs.
+
+This is the current "documentation corpus in, navigable evidence index out"
+flow without runtime model calls, embeddings, a vector database, or a server.
+The larger public-doc experiments below test the same idea at more realistic
+scale and compare the no-infra runtime path against LLM-enriched indexes and
+external retrieval variants.
+
+For the adaptive version of this loop, use a full pipeline config. It separates
+question-generation, retrieval-view, embedding, and judge tiers, and records
+cache/budget/loop settings for reproducible runs. See
+`docs/FULL_PIPELINE_CONFIG.md`.
 
 ## Reproduction Commands
 

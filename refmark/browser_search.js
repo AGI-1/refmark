@@ -15,7 +15,7 @@
   }
 
   function search(index, query, options) {
-    const opts = Object.assign({ topK: 5, expandBefore: 0, expandAfter: 0 }, options || {});
+    const opts = Object.assign({ topK: 5, expandBefore: 0, expandAfter: 0, includeExcluded: false }, options || {});
     const terms = Array.from(new Set(tokenize(query)));
     const scores = new Map();
     const k1 = Number(index.settings && index.settings.k1) || 1.5;
@@ -30,6 +30,9 @@
       const idf = Number(entry.idf) || 0;
       for (const row of entry.p || []) {
         const regionIndex = row[0];
+        if (!opts.includeExcluded && index.regions[regionIndex] && index.regions[regionIndex].search_excluded) {
+          continue;
+        }
         const tf = row[1];
         const length = Number(lengths[regionIndex]) || 0;
         const norm = k1 * (1.0 - b + b * (length / avgLen));
@@ -60,6 +63,9 @@
       text: region.text || "",
       source_path: region.source_path || null,
       context_refs: contextRefs(index.regions, regionIndex, opts.expandBefore, opts.expandAfter),
+      roles: region.roles || [],
+      search_excluded: Boolean(region.search_excluded),
+      search_exclusion_reason: region.search_exclusion_reason || null,
     };
   }
 

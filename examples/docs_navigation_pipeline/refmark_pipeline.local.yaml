@@ -1,0 +1,31 @@
+corpus_path: examples/docs_navigation_pipeline/sample_corpus
+density: balanced
+min_words: 8
+include_embeddings: false
+
+question_generation:
+  enabled: false
+
+retrieval_views:
+  enabled: false
+
+judge:
+  enabled: false
+
+loop:
+  max_iterations: 1
+  target_hit_at_k: 0.85
+  target_gold_coverage: 0.85
+  top_k: 5
+  sample_size: 12
+  seed: 13
+
+artifacts:
+  cache_dir: examples/docs_navigation_pipeline/output_full/cache
+  output_dir: examples/docs_navigation_pipeline/output_full
+  view_cache: examples/docs_navigation_pipeline/output_full/cache/retrieval_views.jsonl
+  question_cache: examples/docs_navigation_pipeline/output_full/cache/questions.jsonl
+  judge_cache: examples/docs_navigation_pipeline/output_full/cache/judgements.jsonl
+  embedding_cache_dir: examples/docs_navigation_pipeline/output_full/cache/embeddings
+  overwrite: false
+

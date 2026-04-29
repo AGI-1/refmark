@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import fnmatch
 import hashlib
@@ -47,6 +47,9 @@ class SearchRegion:
     prev_region_id: str | None
     next_region_id: str | None
     view: RetrievalView
+    roles: list[str] = field(default_factory=list)
+    search_excluded: bool = False
+    search_exclusion_reason: str | None = None
 
     @property
     def stable_ref(self) -> str:
@@ -74,6 +77,9 @@ class SearchRegion:
             "prev_region_id": self.prev_region_id,
             "next_region_id": self.next_region_id,
             "view": self.view.to_dict(),
+            "roles": self.roles,
+            "search_excluded": self.search_excluded,
+            "search_exclusion_reason": self.search_exclusion_reason,
         }
 
 
@@ -89,6 +95,9 @@ class SearchHit:
     source_path: str | None
     context_refs: list[str]
     matched_doc_score: float | None = None
+    roles: list[str] | None = None
+    search_excluded: bool = False
+    search_exclusion_reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -134,8 +143,16 @@ class PortableBM25Index:
             for token in counts:
                 self.doc_postings[token].append(index)
 
-    def search(self, query: str, *, top_k: int = 5, expand_before: int = 0, expand_after: int = 0) -> list[SearchHit]:
-        scored = self._rank_regions(query, top_k=top_k)
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        expand_before: int = 0,
+        expand_after: int = 0,
+        include_excluded: bool = False,
+    ) -> list[SearchHit]:
+        scored = self._rank_regions(query, top_k=top_k, include_excluded=include_excluded)
         return [
             self._hit(rank, region_index, score, expand_before=expand_before, expand_after=expand_after, doc_score=None)
             for rank, (region_index, score) in enumerate(scored[:top_k], start=1)
@@ -150,14 +167,21 @@ class PortableBM25Index:
         candidate_k: int = 50,
         expand_before: int = 0,
         expand_after: int = 0,
+        include_excluded: bool = False,
     ) -> list[SearchHit]:
-        doc_scores = self._rank_docs(query, top_k=doc_top_k)
+        doc_scores = self._rank_docs(query, top_k=doc_top_k, include_excluded=include_excluded)
         candidate_indices = {
             region_index
             for doc_index, _score in doc_scores
             for region_index in self.doc_indices[self.doc_ids[doc_index]]
+            if include_excluded or not self.regions[region_index].search_excluded
         }
-        region_scores = self._rank_regions(query, top_k=candidate_k, candidate_indices=candidate_indices)
+        region_scores = self._rank_regions(
+            query,
+            top_k=candidate_k,
+            candidate_indices=candidate_indices,
+            include_excluded=include_excluded,
+        )
         doc_score_by_id = {self.doc_ids[index]: score for index, score in doc_scores}
         return [
             self._hit(
@@ -179,8 +203,9 @@ class PortableBM25Index:
         candidate_k: int = 30,
         expand_before: int = 0,
         expand_after: int = 0,
+        include_excluded: bool = False,
     ) -> list[SearchHit]:
-        candidates = self._rank_regions(query, top_k=candidate_k)
+        candidates = self._rank_regions(query, top_k=candidate_k, include_excluded=include_excluded)
         if not candidates:
             return []
         max_bm25 = max(score for _index, score in candidates) or 1.0
@@ -207,10 +232,17 @@ class PortableBM25Index:
         *,
         top_k: int,
         candidate_indices: set[int] | None = None,
+        include_excluded: bool = False,
     ) -> list[tuple[int, float]]:
         query_terms = set(tokenize(query))
         if candidate_indices is None:
             candidate_indices = {idx for token in query_terms for idx in self.postings.get(token, [])}
+        if not include_excluded:
+            candidate_indices = {
+                index
+                for index in candidate_indices
+                if not self.regions[index].search_excluded
+            }
         scored = _score_bm25(
             query_terms,
             candidate_indices,
@@ -224,9 +256,15 @@ class PortableBM25Index:
         scored.sort(key=lambda item: (-item[1], self.regions[item[0]].stable_ref))
         return scored[:top_k]
 
-    def _rank_docs(self, query: str, *, top_k: int) -> list[tuple[int, float]]:
+    def _rank_docs(self, query: str, *, top_k: int, include_excluded: bool = False) -> list[tuple[int, float]]:
         query_terms = set(tokenize(query))
         candidate_indices = {idx for token in query_terms for idx in self.doc_postings.get(token, [])}
+        if not include_excluded:
+            candidate_indices = {
+                index
+                for index in candidate_indices
+                if any(not self.regions[region_index].search_excluded for region_index in self.doc_indices[self.doc_ids[index]])
+            }
         scored = _score_bm25(
             query_terms,
             candidate_indices,
@@ -263,6 +301,9 @@ class PortableBM25Index:
             source_path=region.source_path,
             context_refs=context_refs,
             matched_doc_score=round(doc_score, 6) if doc_score is not None else None,
+            roles=region.roles,
+            search_excluded=region.search_excluded,
+            search_exclusion_reason=region.search_exclusion_reason,
         )
 
 
@@ -327,6 +368,9 @@ def build_search_index(
             prev_region_id=record.prev_region_id,
             next_region_id=record.next_region_id,
             view=views[(record.doc_id, record.region_id)],
+            roles=classify_region_roles(record),
+            search_excluded=is_default_search_excluded(record),
+            search_exclusion_reason=search_exclusion_reason(record),
         )
         for record in records
     ]
@@ -357,6 +401,7 @@ def build_search_index(
         "stats": {
             "documents": len({record.doc_id for record in records}),
             "regions": len(regions),
+            "default_search_excluded_regions": sum(1 for region in regions if region.search_excluded),
             "approx_input_tokens": approx_input_tokens,
             "approx_output_tokens": approx_output_tokens,
             "approx_openrouter_cost_usd_at_mistral_nemo": round(
@@ -402,6 +447,7 @@ def export_browser_search_index(
         "stats": {
             "regions": len(index.regions),
             "documents": len({region.doc_id for region in index.regions}),
+            "default_search_excluded_regions": sum(1 for region in index.regions if region.search_excluded),
             "tokens": len(postings),
         },
         "avg_len": index.avg_len,
@@ -441,6 +487,9 @@ def load_search_index(path: str | Path) -> PortableBM25Index:
                 prev_region_id=row.get("prev_region_id"),
                 next_region_id=row.get("next_region_id"),
                 view=view,
+                roles=[str(item) for item in row.get("roles", [])],
+                search_excluded=bool(row.get("search_excluded", False)),
+                search_exclusion_reason=row.get("search_exclusion_reason"),
             )
         )
     return PortableBM25Index(regions, include_source=include_source)
@@ -456,6 +505,9 @@ def _browser_region_payload(region: SearchRegion, *, include_text: bool, max_tex
         "ordinal": region.ordinal,
         "prev_region_id": region.prev_region_id,
         "next_region_id": region.next_region_id,
+        "roles": region.roles,
+        "search_excluded": region.search_excluded,
+        "search_exclusion_reason": region.search_exclusion_reason,
     }
     if include_text:
         text = " ".join(region.text.split())
@@ -463,6 +515,47 @@ def _browser_region_payload(region: SearchRegion, *, include_text: bool, max_tex
             text = text[: max_text_chars - 3].rstrip() + "..."
         payload["text"] = text
     return payload
+
+
+def classify_region_roles(record: RegionRecord) -> list[str]:
+    """Assign lightweight search/eval roles from document shape and path hints."""
+    roles: list[str] = []
+    if _is_query_magnet_record(record):
+        roles.extend(["ledger", "query_magnet", "exclude_from_default_search"])
+    return roles
+
+
+def is_default_search_excluded(record: RegionRecord) -> bool:
+    return "exclude_from_default_search" in classify_region_roles(record)
+
+
+def search_exclusion_reason(record: RegionRecord) -> str | None:
+    if not is_default_search_excluded(record):
+        return None
+    return "Detected changelog/release-note style ledger content that tends to attract broad queries without being primary evidence."
+
+
+def _is_query_magnet_record(record: RegionRecord) -> bool:
+    haystack = " ".join(
+        part
+        for part in (record.doc_id, record.source_path or "", record.text[:240])
+        if part
+    ).lower()
+    markers = (
+        "release_notes",
+        "release-notes",
+        "release notes",
+        "changelog",
+        "change log",
+        "changes.md",
+        "news.md",
+    )
+    if any(marker in haystack for marker in markers):
+        return True
+    # Avoid excluding conceptual history/design documents just because they use
+    # dates; the signal should be ledger-like, not ordinary prose.
+    ledger_terms = ("version", "released", "pull request", "pr #", "contributors", "translation")
+    return sum(1 for term in ledger_terms if term in haystack) >= 3
 
 
 def map_corpus(
@@ -555,36 +648,46 @@ def generate_views(
     def generate(record: RegionRecord) -> tuple[tuple[str, str], RetrievalView]:
         if sleep:
             time.sleep(sleep)
-        return (
-            (record.doc_id, record.region_id),
-            openrouter_view(
+        try:
+            view = openrouter_view(
                 record,
                 model=model,
                 endpoint=endpoint,
                 api_key=api_key,
                 questions_per_region=questions_per_region,
                 keywords_per_region=keywords_per_region,
-            ),
-        )
+            )
+        except Exception:
+            view = local_view(
+                record.text,
+                questions_per_region=questions_per_region,
+                keywords_per_region=keywords_per_region,
+            )
+        return ((record.doc_id, record.region_id), view)
 
     workers = max(1, concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        generated_rows = []
         for key, view in executor.map(generate, missing):
             output[key] = view
             doc_id, region_id = key
-            generated_rows.append(
-                {
-                    "doc_id": doc_id,
-                    "region_id": region_id,
-                    "stable_ref": f"{doc_id}:{region_id}",
-                    "hash": next(record.hash for record in missing if record.doc_id == doc_id and record.region_id == region_id),
-                    "source": source,
-                    "model": model,
-                    "view": view.to_dict(),
-                }
+            _append_view_cache(
+                cache_path,
+                [
+                    {
+                        "doc_id": doc_id,
+                        "region_id": region_id,
+                        "stable_ref": f"{doc_id}:{region_id}",
+                        "hash": next(
+                            record.hash
+                            for record in missing
+                            if record.doc_id == doc_id and record.region_id == region_id
+                        ),
+                        "source": source,
+                        "model": model,
+                        "view": view.to_dict(),
+                    }
+                ],
             )
-        _append_view_cache(cache_path, generated_rows)
     return output
 
 
@@ -651,10 +754,12 @@ Text:
     )
     with request.urlopen(req, timeout=90) as response:
         response_payload = json.loads(response.read().decode("utf-8"))
-    content = response_payload["choices"][0]["message"]["content"]
+    content = response_payload["choices"][0]["message"].get("content")
+    if not isinstance(content, str):
+        return local_view(record.text, questions_per_region=questions_per_region, keywords_per_region=keywords_per_region)
     try:
         parsed = _parse_json_object(content)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError):
         return local_view(record.text, questions_per_region=questions_per_region, keywords_per_region=keywords_per_region)
     return RetrievalView(
         summary=str(parsed.get("summary", "")).strip(),

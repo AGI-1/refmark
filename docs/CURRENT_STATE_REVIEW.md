@@ -85,8 +85,11 @@ does not yet prove that tiny local models replace embeddings.
 | Refmark-enriched Qwen3 embeddings | Full BGB fixed benchmark hit@10 `0.9888`; randomized 200k stress cycles around `0.9174-0.9614` hit@10. |
 | Cached query embedding -> article classifier | 3-cycle held-out hit@10 `0.9377`, hit@50 `0.9819`; strong if runtime embeddings already exist. |
 | Static generated views / concern aliases | Large gains on curated concern suite; useful for no-runtime-infra docs search. |
-| Deterministic/confusion signatures | Small global gain, strong targeted repairs; best adapted index + teacher blend hit@10 `0.6389` on fair split. |
+| Deterministic/confusion signatures | Small global gain, strong targeted repairs; best adapted index + teacher blend hit@10 `0.6389` on fair split. Cycle1 deterministic signatures transferred modestly to hard Gemma cycle3: hit@10 `0.3561 -> 0.3718`. |
+| LLM intent signatures | Useful for targeted hard-zone repair, but highly provenance-sensitive. Cache key now includes prompt/train-query context; clean article-only cycle1 hard40 signatures transfer only modestly (`0.3561 -> 0.3707` hit@10 on cycle3). |
 | Oracle query reformulation on 10-article slice | Raw BM25 hit@10 `0.6207`; learned train-derived term bank `0.6897`; per-query oracle `0.8966`. Shows real expansion ceiling. |
+| Surface-conditioned reformulation | No-leak 32-article run improved BM25 hit@10 `0.6122 -> 0.6226` and MRR `0.4424 -> 0.4564`; useful as a local reranker signal, not a standalone fix. |
+| Surface recall diagnostic | Enriched article BM25 on 32x5 split: hit@10 `0.6122`, hit@100 `0.8008`; direct queries hit@10 `0.9108`, concern `0.5394`, adversarial `0.3871`. Coarse router is the bottleneck. |
 
 ### Negative Or Limited Results
 
@@ -97,6 +100,7 @@ does not yet prove that tiny local models replace embeddings.
 | Global query reformulator | Naive append learned generic/legal magnet terms and hurt BM25; fused side-channel was only barely positive. |
 | Fielded BM25/RRF | Did not beat combined article views in tested BGB split. |
 | Aggressive signature gating | Repairs hard rows but can damage global quality; needs confidence/confusion-aware triggers. |
+| Same-split LLM signature artifacts | Can look spectacular when metadata is generated from the same question distribution. Treat as upper-bound/debug signal unless cache and split provenance are explicit. |
 
 ### Latest Reformulation Runs
 
@@ -105,6 +109,8 @@ Scripts:
 - `examples/bgb_browser_search/train_bgb_query_reformulator.py`
 - `examples/bgb_browser_search/iterate_bgb_oracle_reformulation.py`
 - `examples/bgb_browser_search/train_bgb_oracle_reformulation_predictor.py`
+- `examples/bgb_browser_search/train_bgb_surface_reformulator.py`
+- `examples/bgb_browser_search/report_bgb_surface_recall.py`
 
 Artifacts:
 
@@ -113,6 +119,9 @@ Artifacts:
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_query_reformulator_fusion_probe_report.json`
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_10articles_10iters.json`
 - `examples/bgb_browser_search/output_full_qwen_turbo/bgb_oracle_reformulation_predictor_10articles_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_reformulator_32x5_surface20_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_reformulator_12x_oracle_report.json`
+- `examples/bgb_browser_search/output_full_qwen_turbo/bgb_surface_recall_32x5.json`
 
 Key numbers:
 
@@ -123,11 +132,18 @@ Key numbers:
 | 10-article learned term bank | hit@10 `0.6897` vs raw `0.6207`, no worsened rows. |
 | 10-article per-query oracle | hit@10 `0.8966`, hit@1 `0.8276`; high ceiling. |
 | 10-article oracle-term predictor | 129k params, 0.54 MB; predicted append hit@10 `0.6897`, MRR `0.5969`; best fusion hit@10 `0.6552`. |
+| 32-article surface-conditioned predictor | No-leak surface-k 20 fusion hit@10 `0.6226` vs raw `0.6122`, MRR `0.4564` vs `0.4424`; model 2.78 MB. |
+| 12-article surface oracle-label predictor | No-leak fusion hit@10 `0.6723` vs raw `0.6554`, MRR `0.5299` vs `0.4978`; model 1.50 MB. |
+| 32x5 surface recall report | Enriched article BM25 hit@5/10/20/50/100 = `0.5283/0.6122/0.6792/0.7442/0.8008`; raw article BM25 hit@10 only `0.2579`. |
 
 Interpretation:
 
 - Query expansion can improve BM25 when terms are locally relevant.
 - Global unconstrained expansion learns magnet terms and can hurt.
+- Surface-conditioned expansion avoids the worst leakage/magnet behavior but is
+  bounded by coarse surface recall.
+- Direct questions are largely solved; concern/adversarial wording is where the
+  router loses articles before local models can help.
 - The promising architecture is an ensemble:
 
 ```text

@@ -1,0 +1,8 @@
+{"query":"How do I rotate API tokens without downtime?","gold_refs":["security:P03"],"metadata":{"style":"task","topic":"security"}}
+{"query":"Where do I configure SAML group mapping?","gold_refs":["authentication:P03"],"metadata":{"style":"direct","topic":"authentication"}}
+{"query":"How can I stream audit events into our SIEM?","gold_refs":["webhooks:P03"],"metadata":{"style":"task","topic":"webhooks"}}
+{"query":"What should I check when a webhook keeps failing?","gold_refs":["troubleshooting:P04"],"metadata":{"style":"troubleshooting","topic":"webhooks"}}
+{"query":"How do I deploy a release and roll it back safely?","gold_refs":["deployment:P02-deployment:P03"],"metadata":{"style":"range","topic":"deployment"}}
+{"query":"Which settings control API rate limits and burst capacity?","gold_refs":["configuration:P03"],"metadata":{"style":"direct","topic":"configuration"}}
+{"query":"How do I create a support bundle for debugging?","gold_refs":["troubleshooting:P03"],"metadata":{"style":"task","topic":"support"}}
+{"query":"Can users authenticate with an identity provider instead of passwords?","gold_refs":["authentication:P03"],"metadata":{"style":"indirect","topic":"authentication"}}

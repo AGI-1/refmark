@@ -10,8 +10,13 @@ node_modules/
 
 examples/*/output/
 examples/*/output_*/
+examples/*/output_full/
 bench_results/
 .refmark/
+
+# Model-review scratch artifacts and handoff bundles.
+*_suggestions.txt
+docs/refmark_model_handoff*.md
 
 # Local corpus fetches and generated training datasets.
 refmark_train/source_docs/raw/

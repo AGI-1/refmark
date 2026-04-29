@@ -832,6 +832,147 @@ Important interpretation:
 - This does not satisfy the fully browser-offline goal because the embedding
   model is still required at query time.
 
+### Coarse Area Reduction
+
+We then tested a coarser two-stage idea: first reduce the BGB to a small number
+of broad areas, then resolve inside that area set. With about 150 articles per
+area, the full corpus becomes `17` areas. This is deliberately coarse, but it
+answers whether an embedding-quality signal can cheaply narrow the surface for
+a second-stage resolver.
+
+Evaluation setup:
+
+- Gold unit: area containing the gold article.
+- Areas: `17`.
+- Eval rows: `5,810` held-out questions from the three 200k stress cycles.
+- Input: cached Qwen3 query embeddings.
+- Tested: full embeddings, random projections, PCA projections, centroid
+  routers, int8 centroids, and small MLP heads.
+
+| Area router | top-1 | top-2 | top-3 | top-5 | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| full 4096-d embedding + MLP | 0.8036 | 0.9313 | 0.9642 | 0.9855 | 1.58M-param head, about 6.3 MB FP32. |
+| PCA-1024 + MLP | 0.8102 | 0.9308 | 0.9676 | 0.9869 | Best top-1; projection storage not included in head size. |
+| PCA-512 + MLP | 0.7974 | 0.9248 | 0.9632 | 0.9855 | Similar quality with smaller head. |
+| PCA-256 + MLP | 0.7735 | 0.9127 | 0.9563 | 0.9843 | 105k params, about 0.42 MB FP32 head. |
+| PCA-128 + MLP | 0.7373 | 0.8971 | 0.9468 | 0.9806 | 56k params, about 0.22 MB FP32 head. |
+| PCA-128 int8 centroid | 0.6243 | 0.8067 | 0.8793 | 0.9473 | About 2.2 KB centroid table. |
+| PCA-16 int8 centroid | 0.5091 | 0.7165 | 0.8164 | 0.9103 | About 272 bytes centroid table. |
+
+Interpretation:
+
+- A 17-area router is viable if query embeddings are already available.
+- The practical target is not "pick one area perfectly"; it is "return two or
+  three broad areas, then refine inside them."
+- Projection/head size must be reported honestly. PCA-128 needs about `2.0 MB`
+  for a FP32 4096x128 projection matrix before quantization, in addition to the
+  head or centroids. Random projections can be regenerated from a seed, but
+  still assume a full query embedding exists at runtime.
+- This strengthens the ensemble direction: embedding teacher -> cheap coarse
+  area reducer -> local BM25/reranker/model inside a much smaller surface.
+
+Area-size sweep:
+
+| Area size | Area count | best top-1 | best top-2 | best top-5 | PCA-128 MLP top-2 | PCA-128 int8 centroid top-5 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 75 articles | 34 | 0.7404 | 0.8861 | 0.9742 | 0.8353 | 0.9117 |
+| 100 articles | 26 | 0.7792 | 0.9081 | 0.9812 | 0.8769 | 0.9231 |
+| 150 articles | 17 | 0.8102 | 0.9308 | 0.9869 | 0.8971 | 0.9473 |
+| 200 articles | 13 | 0.8138 | 0.9379 | 0.9898 | 0.9081 | 0.9571 |
+| 300 articles | 9 | 0.8401 | 0.9513 | 0.9950 | 0.9301 | 0.9776 |
+
+The curve says the first hierarchy layer should be broad. A top-2/top-3 area
+set around 150-200 articles per area is a plausible reducer. A 300-article
+area is more reliable, but the second stage then has to search a much larger
+surface. The next experiment should measure end-to-end article hit@k after
+running the best article resolver inside the top-2/top-3 area union.
+
+For the 9-area setup we also swept reducer shapes:
+
+| Reducer / router | dims | top-1 | top-2 | top-3 | top-5 | Storage note |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| full embedding + MLP | 4096 | 0.8353 | 0.9465 | 0.9781 | 0.9964 | 6.3 MB FP32 head. |
+| PCA + MLP | 512 | 0.8277 | 0.9427 | 0.9766 | 0.9950 | 0.8 MB head plus 8 MB FP32 projection. |
+| PCA + MLP | 256 | 0.8096 | 0.9334 | 0.9733 | 0.9936 | 0.4 MB head plus 4 MB FP32 projection. |
+| PCA + MLP | 128 | 0.7869 | 0.9255 | 0.9694 | 0.9936 | 0.2 MB head plus 2 MB FP32 projection. |
+| PCA + MLP | 64 | 0.7554 | 0.9098 | 0.9623 | 0.9914 | 0.11 MB head plus 1 MB FP32 projection. |
+| PCA + MLP | 16 | 0.6606 | 0.8501 | 0.9227 | 0.9807 | 40 KB head plus 256 KB FP32 projection. |
+| PCA int8 centroid | 128 | 0.6747 | 0.8437 | 0.9189 | 0.9773 | 1.1 KB centroid table, projection excluded. |
+| PCA int8 centroid | 16 | 0.6138 | 0.7957 | 0.8850 | 0.9668 | 144 byte centroid table, projection excluded. |
+
+No slicing/reduction variant exceeded the full embedding head in this run.
+PCA was consistently the strongest reducer. Shuffled/random coordinate samples
+were still informative: the best 512-d random coordinate samples reached about
+top-1 `0.80`, top-2 `0.93`, and top-5 `0.993`, which implies area information
+is broadly distributed across the embedding rather than concentrated in a tiny
+handful of dimensions. Int8 centroids were nearly lossless compared with FP32
+centroids at this coarse granularity.
+
+Compressed vectors at higher granularity:
+
+| Area size | Area count | full top-2 | full top-5 | PCA-128 top-2 | PCA-128 top-5 | PCA-256 top-2 | PCA-256 top-5 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 articles | 506 | 0.8019 | 0.9153 | 0.7477 | 0.8902 | 0.7575 | 0.8924 |
+| 10 articles | 253 | 0.8090 | 0.9324 | 0.7454 | 0.8914 | 0.7547 | 0.9002 |
+| 25 articles | 102 | 0.8444 | 0.9511 | 0.7744 | 0.9236 | 0.8007 | 0.9343 |
+| 50 articles | 51 | 0.8919 | 0.9697 | 0.8408 | 0.9525 | 0.8616 | 0.9594 |
+| 100 articles | 26 | 0.9134 | 0.9821 | 0.8831 | 0.9714 | 0.9007 | 0.9757 |
+| 150 articles | 17 | 0.9313 | 0.9855 | 0.8985 | 0.9809 | 0.9115 | 0.9840 |
+| 300 articles | 9 | 0.9530 | 0.9947 | 0.9308 | 0.9924 | 0.9422 | 0.9948 |
+
+The result is strongest for candidate recall rather than exact routing.
+PCA-128/256 can still find the correct small neighborhood surprisingly often:
+with 506 five-article areas, top-5 remains about `0.89`; with 102 areas,
+PCA-256 top-5 reaches `0.9343`. The practical implication is a two-layer
+compressed route: use PCA-128/256 to propose a small area set, then use a
+stronger local resolver inside those areas.
+
+### Frozen Local Embedders
+
+To remove Qwen/OpenRouter from runtime, we tested off-the-shelf local
+SentenceTransformer embedders without distillation or fine-tuning. The benchmark
+embeds BGB article text/views and the same held-out stress queries, then scores
+by cosine similarity.
+
+Setup notes:
+
+- Installed `sentence-transformers` in the current Python environment.
+- Pip reported a Hugging Face package version conflict with `aider-chat`; this
+  should be isolated in a venv for future reproducible runs.
+- First run includes model download. Each full BGB encode/eval took roughly
+  two to three minutes on the Ryzen mini-PC CPU.
+
+Results:
+
+| Model / indexed text | article hit@10 | article hit@50 | DE article hit@10 | EN article hit@10 | area25 top-5 | area50 top-5 | area100 top-5 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| MiniLM, combined | 0.3360 | 0.5391 | 0.3232 | 0.3483 | 0.5561 | 0.6515 | 0.7613 |
+| e5-small, source | 0.5077 | 0.7003 | 0.6814 | 0.3399 | 0.6539 | 0.7243 | 0.8036 |
+| e5-small, combined | 0.6069 | 0.7566 | 0.7416 | 0.4766 | 0.7668 | 0.8320 | 0.8912 |
+| e5-small, Refmark view | 0.7272 | 0.8818 | 0.7115 | 0.7424 | 0.8391 | 0.8873 | 0.9263 |
+
+The important finding is not "small local embedder beats Qwen"; it does not.
+The finding is that generated multilingual Refmark views make a frozen local
+embedder much more useful. Source-only e5 favors German heavily and performs
+poorly on English queries. Refmark-view e5 balances German/English and reaches
+article hit@10 `0.7272` without any remote model at query time.
+
+Best local no-Qwen runtime split, `intfloat/multilingual-e5-small` over
+Refmark views:
+
+| Target | all top-5 | concern top-5 | adversarial top-5 | DE top-5 | EN top-5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| article | 0.6460 | 0.6393 | 0.6525 | 0.6268 | 0.6645 |
+| 5-article area | 0.7305 | 0.7297 | 0.7312 | 0.7265 | 0.7343 |
+| 25-article area | 0.8391 | 0.8444 | 0.8338 | 0.8365 | 0.8416 |
+| 50-article area | 0.8873 | 0.8947 | 0.8800 | 0.8841 | 0.8903 |
+| 100-article area | 0.9263 | 0.9331 | 0.9196 | 0.9198 | 0.9326 |
+
+This makes the browser/edge path more concrete: generate compact multilingual
+Refmark views offline, ship a small local embedder, retrieve coarse
+neighborhoods, then run lexical or learned local refinement inside those
+neighborhoods.
+
 ### Query Reformulation
 
 We also tested a smaller offline idea: train a tiny model to predict
@@ -912,6 +1053,12 @@ Interpretation:
 - Multilingual generated views enabled English queries over German legal text.
 - Deterministic compressed intent signatures improved static BM25.
 - LLM signatures helped targeted hard heatmap zones.
+- Confusion signatures plus neighbor-window scoring show that many failures are
+  near misses in the right legal neighborhood, not random misses.
+- Sliding 50-article areas are useful as a soft neighborhood prior: hit@10
+  improved from `0.6289` to `0.6456`, although rank-1/MRR dropped.
+- Cached Qwen3 query embeddings can route to 51 equal areas well enough for a
+  small candidate set: top-2 `0.8988`, top-3 `0.9435`.
 - Curated concern aliases improved demo-style motivation queries when held out
   properly.
 - Low-BM25 hybrid helped natural query usefulness/citation quality.
@@ -924,7 +1071,18 @@ Interpretation:
 
 - Raw generated aliases hurt.
 - Alias-only side indexes were poor.
+- Raw train-question aliases looked strong on a 32x5 slice but collapsed on the
+  full 3-cycle held-out split, so they are now treated as overfit metadata.
 - Fielded BM25/RRF over generated fields was worse than the combined baseline.
+- BM25 `k1`/`b` tuning did not beat the default in a meaningful way.
+- A simple wrong-top -> gold-article confusion booster overfit train and only
+  moved held-out hit@10 from `0.6289` to `0.6315` while dropping MRR to
+  `0.4228`.
+- Hard area routing through top sliding windows filtered out too many gold
+  articles; top 8 areas had `0.8134` area recall but only `0.6059` final
+  article hit@10.
+- A tiny text-only query-to-area classifier is not enough: top-1 `0.3024`,
+  top-5 `0.6477`, top-8 `0.7461` despite near-perfect train accuracy.
 - Simple score-based rescue gating was too blunt.
 - Low deterministic top score was not a reliable rescue trigger.
 - Direct query-text -> article classifier failed.

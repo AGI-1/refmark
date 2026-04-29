@@ -1,0 +1,54 @@
+corpus_path: examples/portable_search_index/output/online_corpora/fastapi_docs
+density: balanced
+min_words: 8
+include_embeddings: false
+
+question_generation:
+  enabled: true
+  provider: openrouter
+  model: qwen/qwen-turbo
+  endpoint: https://openrouter.ai/api/v1/chat/completions
+  api_key_env: OPENROUTER_API_KEY
+  concurrency: 8
+  retries: 2
+  temperature: 0.2
+  max_tokens: 512
+  input_price_per_million: 0.05
+  output_price_per_million: 0.2
+
+retrieval_views:
+  enabled: true
+  provider: openrouter
+  model: mistralai/mistral-nemo
+  endpoint: https://openrouter.ai/api/v1/chat/completions
+  api_key_env: OPENROUTER_API_KEY
+  concurrency: 10
+  retries: 2
+  temperature: 0.2
+  max_tokens: 320
+  input_price_per_million: 0.01
+  output_price_per_million: 0.03
+
+judge:
+  enabled: false
+
+loop:
+  max_iterations: 1
+  target_hit_at_k: 0.85
+  target_gold_coverage: 0.85
+  top_k: 10
+  sample_size: 160
+  seed: 29
+
+artifacts:
+  cache_dir: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral/cache
+  output_dir: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral
+  view_cache: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral/cache/retrieval_views.jsonl
+  question_cache: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral/cache/questions.jsonl
+  judge_cache: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral/cache/judgements.jsonl
+  embedding_cache_dir: examples/portable_search_index/output/fastapi_pipeline_qwen_mistral/cache/embeddings
+  overwrite: false
+
+budget:
+  max_estimated_usd: 0.5
+
