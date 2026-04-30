@@ -237,6 +237,40 @@ def test_eval_run_reports_heatmap_and_confidence_gating():
     assert "add_hard_negative_or_disambiguating_signature" in run.diagnostics["adaptation"][0]["candidate_actions"]
 
 
+def test_eval_run_reports_query_style_gap():
+    corpus = CorpusMap.from_records(
+        [
+            _record("P01", "Refunds are available within 30 days.", 1),
+            _record("P02", "Expedited shipping is non-refundable.", 2),
+        ]
+    )
+    suite = EvalSuite(
+        examples=[
+            EvalExample("refund window?", ["policy:P01"], metadata={"variant": "direct"}),
+            EvalExample("my package cost was not returned", ["policy:P02"], metadata={"query_style": "concern"}),
+        ],
+        corpus=corpus,
+    )
+
+    run = suite.evaluate(
+        lambda query: (
+            [{"stable_ref": "policy:P01", "score": 4.0}]
+            if "refund window" in query
+            else [{"stable_ref": "policy:P01", "score": 4.0}]
+        ),
+        k=1,
+    )
+
+    assert [result.query_style for result in run.examples] == ["direct", "concern"]
+    assert run.diagnostics["by_query_style"]["direct"]["hit_at_1"] == 1.0
+    assert run.diagnostics["by_query_style"]["concern"]["hit_at_1"] == 0.0
+    assert run.diagnostics["query_style_gap"]["hit_at_1_gap"] == 1.0
+    assert run.diagnostics["query_style_gap"]["weakest_by_hit_at_1"] == {
+        "style": "concern",
+        "value": 0.0,
+    }
+
+
 def test_eval_run_reports_range_and_distributed_gold_modes():
     corpus = CorpusMap.from_records(
         [

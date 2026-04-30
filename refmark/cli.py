@@ -13,8 +13,9 @@ from refmark.citations import citation_refs_to_strings, parse_citation_refs
 from refmark.core import inject, strip
 from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
-from refmark.discovery import discover_corpus, write_discovery
+from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, review_discovery, write_discovery
 from refmark.edit import apply_ref_diff
+from refmark.feedback import analyze_feedback, read_feedback_jsonl
 from refmark.highlight import highlight_refs, render_highlight_html, render_highlight_json, render_highlight_text
 from refmark.languages import choose_edit_chunker, choose_live_marker_format, list_supported_languages
 from refmark.pipeline import (
@@ -32,8 +33,9 @@ from refmark.pipeline_config import load_full_pipeline_config, write_full_pipeli
 from refmark.pipeline_runner import run_full_pipeline
 from refmark.prompt import build_reference_prompt
 from refmark.provenance import build_eval_provenance, validate_provenance
+from refmark.question_plan import build_question_plan, question_plan_to_dict
 from refmark.rag_eval import CorpusMap, EvalSuite
-from refmark.search_index import OPENROUTER_CHAT_URL, build_search_index, export_browser_search_index, load_search_index
+from refmark.search_index import OPENROUTER_CHAT_URL, analyze_index_smells, build_search_index, export_browser_search_index, load_search_index
 from refmark.workflow_config import WorkflowConfig, load_workflow_config, resolve_workflow_config
 
 
@@ -182,6 +184,15 @@ def main():
     search_index_parser.add_argument("--include-excluded", action="store_true", help="Include regions marked excluded from default search.")
     search_index_parser.add_argument("--json", action="store_true", help="Emit JSON hits.")
 
+    inspect_index_parser = subparsers.add_parser(
+        "inspect-index",
+        help="Report deterministic data-smell diagnostics for a portable Refmark search index.",
+    )
+    inspect_index_parser.add_argument("index", help="Index JSON produced by build-index.")
+    inspect_index_parser.add_argument("--duplicate-threshold", type=float, default=0.86)
+    inspect_index_parser.add_argument("--max-pairs", type=int, default=25)
+    inspect_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path.")
+
     eval_index_parser = subparsers.add_parser(
         "eval-index",
         help="Evaluate a portable Refmark search index against JSONL query/gold_refs examples.",
@@ -207,6 +218,16 @@ def main():
     eval_index_parser.add_argument("--provenance-out", default=None, help="Optional provenance JSON output path.")
     eval_index_parser.add_argument("--expect-provenance", default=None, help="Fail if current inputs/settings differ from this provenance JSON.")
     eval_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    feedback_parser = subparsers.add_parser(
+        "feedback-diagnostics",
+        help="Aggregate production query feedback into reviewable Refmark adaptation candidates.",
+    )
+    feedback_parser.add_argument("feedback", help="JSONL query feedback rows.")
+    feedback_parser.add_argument("--manifest", default=None, help="Optional current region manifest for ref validation.")
+    feedback_parser.add_argument("--min-count", type=int, default=2, help="Minimum repeated normalized query count to report.")
+    feedback_parser.add_argument("--top-n", type=int, default=25, help="Maximum clusters to emit.")
+    feedback_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
 
     pack_context_parser = subparsers.add_parser(
         "pack-context",
@@ -234,12 +255,44 @@ def main():
     )
     discover_parser.add_argument("manifest", help="Manifest JSONL path.")
     discover_parser.add_argument("-o", "--output", required=True, help="Discovery JSON output path.")
-    discover_parser.add_argument("--mode", choices=["whole", "hierarchical"], default="whole")
+    discover_parser.add_argument("--mode", choices=["whole", "hierarchical", "windowed"], default="whole")
     discover_parser.add_argument("--source", choices=["local", "openrouter"], default="local")
     discover_parser.add_argument("--model", default="local")
     discover_parser.add_argument("--endpoint", default=OPENROUTER_CHAT_URL)
     discover_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     discover_parser.add_argument("--max-input-tokens", type=int, default=180000)
+    discover_parser.add_argument("--window-tokens", type=int, default=None, help="Process discovery in region-safe windows of this token size.")
+    discover_parser.add_argument("--overlap-regions", type=int, default=1, help="Region overlap between discovery windows.")
+
+    review_discovery_parser = subparsers.add_parser(
+        "review-discovery",
+        help="Create a deterministic review queue for noisy discovery output.",
+    )
+    review_discovery_parser.add_argument("discovery", help="Discovery JSON path.")
+    review_discovery_parser.add_argument("--manifest", default=None, help="Optional manifest JSONL for text/heading checks.")
+    review_discovery_parser.add_argument("--max-issues", type=int, default=50)
+    review_discovery_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path.")
+
+    discovery_card_parser = subparsers.add_parser(
+        "discovery-card",
+        help="Build a compact question-generation context card for one ref.",
+    )
+    discovery_card_parser.add_argument("manifest", help="Manifest JSONL path.")
+    discovery_card_parser.add_argument("discovery", help="Discovery JSON path.")
+    discovery_card_parser.add_argument("--ref", required=True, help="Stable ref such as doc:P03.")
+    discovery_card_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path.")
+
+    question_plan_parser = subparsers.add_parser(
+        "question-plan",
+        help="Create an inspectable direct/concern/adversarial question plan from discovery.",
+    )
+    question_plan_parser.add_argument("manifest", help="Manifest JSONL path.")
+    question_plan_parser.add_argument("discovery", help="Discovery JSON path.")
+    question_plan_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path.")
+    question_plan_parser.add_argument("--direct-per-region", type=int, default=1)
+    question_plan_parser.add_argument("--concern-per-region", type=int, default=1)
+    question_plan_parser.add_argument("--adversarial-per-region", type=int, default=1)
+    question_plan_parser.add_argument("--include-excluded", action="store_true")
 
     pipeline_config_parser = subparsers.add_parser(
         "init-pipeline-config",
@@ -309,14 +362,24 @@ def main():
         _handle_build_index(args)
     elif args.command == "search-index":
         _handle_search_index(args)
+    elif args.command == "inspect-index":
+        _handle_inspect_index(args)
     elif args.command == "eval-index":
         _handle_eval_index(args)
+    elif args.command == "feedback-diagnostics":
+        _handle_feedback_diagnostics(args)
     elif args.command == "pack-context":
         _handle_pack_context(args)
     elif args.command == "question-prompt":
         _handle_question_prompt(args)
     elif args.command == "discover":
         _handle_discover(args)
+    elif args.command == "review-discovery":
+        _handle_review_discovery(args)
+    elif args.command == "discovery-card":
+        _handle_discovery_card(args)
+    elif args.command == "question-plan":
+        _handle_question_plan(args)
     elif args.command == "init-pipeline-config":
         _handle_init_pipeline_config(args)
     elif args.command == "check-pipeline-config":
@@ -552,6 +615,25 @@ def _handle_search_index(args):
         print(f"   text: {snippet}")
 
 
+def _handle_inspect_index(args):
+    index = load_search_index(args.index)
+    payload = {
+        "schema": "refmark.index_data_smells.v1",
+        "index": args.index,
+        "diagnostics": analyze_index_smells(
+            index,
+            duplicate_threshold=args.duplicate_threshold,
+            max_pairs=args.max_pairs,
+        ),
+    }
+    output = json.dumps(payload, indent=2)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote index data-smell report to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
 def _handle_eval_index(args):
     index = load_search_index(args.index)
     corpus = CorpusMap.from_manifest(args.manifest, metadata={"manifest_path": args.manifest}) if args.manifest else _corpus_from_search_index(index)
@@ -625,6 +707,18 @@ def _handle_eval_index(args):
         sys.exit(3)
 
 
+def _handle_feedback_diagnostics(args):
+    events = read_feedback_jsonl(args.feedback)
+    corpus = CorpusMap.from_manifest(args.manifest, metadata={"manifest_path": args.manifest}) if args.manifest else None
+    report = analyze_feedback(events, corpus=corpus, min_count=args.min_count, top_n=args.top_n)
+    output = json.dumps(report.to_dict(), indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote feedback diagnostics to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
 def _handle_pack_context(args):
     try:
         refs = citation_refs_to_strings(parse_citation_refs(args.refs))
@@ -677,6 +771,8 @@ def _handle_discover(args):
         endpoint=args.endpoint,
         api_key_env=args.api_key_env,
         max_input_tokens=args.max_input_tokens,
+        window_tokens=args.window_tokens,
+        overlap_regions=args.overlap_regions,
     )
     write_discovery(discovery, args.output)
     print(
@@ -684,6 +780,64 @@ def _handle_discover(args):
         f"({discovery.corpus_tokens} tokens) to {args.output}",
         file=sys.stderr,
     )
+
+
+def _handle_review_discovery(args):
+    discovery = load_discovery(args.discovery)
+    records = read_manifest(args.manifest) if args.manifest else []
+    issues = review_discovery(discovery, records=records, max_issues=args.max_issues)
+    payload = {
+        "schema": "refmark.discovery_review.v1",
+        "discovery": args.discovery,
+        "manifest": args.manifest,
+        "issues": [issue.to_dict() for issue in issues],
+        "summary": {
+            "issues": len(issues),
+            "high": sum(1 for issue in issues if issue.severity == "high"),
+            "medium": sum(1 for issue in issues if issue.severity == "medium"),
+            "low": sum(1 for issue in issues if issue.severity == "low"),
+        },
+    }
+    output = json.dumps(payload, indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote discovery review with {len(issues)} issues to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
+def _handle_discovery_card(args):
+    records = read_manifest(args.manifest)
+    discovery = load_discovery(args.discovery)
+    by_ref = {f"{record.doc_id}:{record.region_id}": record for record in records}
+    if args.ref not in by_ref:
+        raise SystemExit(f"Unknown ref: {args.ref}")
+    card = build_discovery_context_card(discovery, by_ref[args.ref], records=records)
+    output = json.dumps({"schema": "refmark.discovery_context_card.v1", "card": card.to_dict()}, indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote discovery context card for {args.ref} to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
+def _handle_question_plan(args):
+    records = read_manifest(args.manifest)
+    discovery = load_discovery(args.discovery)
+    plan = build_question_plan(
+        discovery,
+        records,
+        direct_per_region=args.direct_per_region,
+        concern_per_region=args.concern_per_region,
+        adversarial_per_region=args.adversarial_per_region,
+        include_excluded=args.include_excluded,
+    )
+    output = json.dumps(question_plan_to_dict(plan), indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote question plan with {len(plan)} plan items to {args.output}", file=sys.stderr)
+    else:
+        print(output)
 
 
 def _handle_init_pipeline_config(args):

@@ -19,7 +19,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from examples.portable_search_index.evaluate_real_corpus import _read_question_cache  # noqa: E402
 from refmark.search_index import PortableBM25Index, SearchRegion, load_search_index, tokenize  # noqa: E402
 
 
@@ -28,6 +27,20 @@ class RankedHit:
     stable_ref: str
     doc_id: str
     score: float
+
+
+@dataclass(frozen=True)
+class CompareQuestion:
+    query: str
+    doc_id: str
+    region_id: str
+    stable_ref: str
+    gold_refs: list[str]
+    hash: str
+    source: str
+    model: str
+    gold_mode: str = "single"
+    query_style: str = "unspecified"
 
 
 def main() -> None:
@@ -139,6 +152,10 @@ def main() -> None:
         "accuracy_reports": {name: _accuracy_only(result) for name, result in reports.items()},
         "latency_reports": {name: _latency_only(result) for name, result in reports.items()},
         "best_hybrid": _best_hybrid(reports),
+        "by_query_style": {
+            name: evaluate_by_query_style(search_fn, questions, top_ks)
+            for name, search_fn in methods.items()
+        },
         "coarse_article_reports": {
             name: evaluate_coarse(search_fn, questions, top_ks, mode="article")
             for name, search_fn in methods.items()
@@ -370,6 +387,14 @@ def evaluate(search_fn, questions, top_ks: tuple[int, ...]) -> dict[str, object]
     }
 
 
+def evaluate_by_query_style(search_fn, questions: list[CompareQuestion], top_ks: tuple[int, ...]) -> dict[str, object]:
+    styles = sorted({question.query_style for question in questions})
+    return {
+        style: _accuracy_only(evaluate(search_fn, [question for question in questions if question.query_style == style], top_ks))
+        for style in styles
+    }
+
+
 def evaluate_coarse(search_fn, questions, top_ks: tuple[int, ...], *, mode: str) -> dict[str, object]:
     max_k = max(top_ks)
     hits_by_k = Counter({k: 0 for k in top_ks})
@@ -404,10 +429,50 @@ def _questions_for_index(index: PortableBM25Index, cache_path: Path):
     refs = {region.stable_ref for region in index.regions}
     questions = [
         question
-        for question in _read_question_cache(cache_path).values()
+        for question in _read_questions(cache_path)
         if set(question.gold_refs).issubset(refs)
     ]
     questions.sort(key=lambda item: (item.stable_ref, item.query))
+    return questions
+
+
+def _read_questions(path: Path) -> list[CompareQuestion]:
+    """Read either legacy question-cache rows or product eval JSONL rows."""
+    if not path.exists():
+        return []
+    questions: list[CompareQuestion] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        gold_refs = [str(item) for item in row.get("gold_refs", [])]
+        stable_ref = str(row.get("stable_ref") or (gold_refs[0] if gold_refs else ""))
+        if not gold_refs and stable_ref:
+            gold_refs = [stable_ref]
+        if not stable_ref or not gold_refs:
+            continue
+        doc_id = str(row.get("doc_id") or stable_ref.split(":", 1)[0])
+        region_id = str(row.get("region_id") or (stable_ref.split(":", 1)[1] if ":" in stable_ref else stable_ref))
+        source_hashes = row.get("source_hashes") if isinstance(row.get("source_hashes"), dict) else {}
+        question = CompareQuestion(
+            query=str(row["query"]),
+            doc_id=doc_id,
+            region_id=region_id,
+            stable_ref=stable_ref,
+            gold_refs=gold_refs,
+            hash=str(row.get("hash") or source_hashes.get(stable_ref, "")),
+            source=str(row.get("source") or metadata.get("source", "eval-jsonl")),
+            model=str(row.get("model") or metadata.get("model") or metadata.get("question_model", "unknown")),
+            gold_mode=str(row.get("gold_mode") or metadata.get("gold_mode", "single")),
+            query_style=str(row.get("query_style") or metadata.get("query_style") or metadata.get("style", "unspecified")),
+        )
+        key = (question.stable_ref, question.query, tuple(question.gold_refs))
+        if key in seen:
+            continue
+        seen.add(key)
+        questions.append(question)
     return questions
 
 

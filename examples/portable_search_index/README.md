@@ -16,6 +16,7 @@ Build a local zero-cost index over the sample docs:
 ```bash
 python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
 python -m refmark.cli search-index examples/portable_search_index/output/index_local.json "How do I rotate tokens?"
+python -m refmark.cli inspect-index examples/portable_search_index/output/index_local.json
 python -m refmark.cli export-browser-index examples/portable_search_index/output/index_local.json -o examples/portable_search_index/output/index_browser.json
 ```
 
@@ -73,11 +74,29 @@ current page.
 The FastAPI navigation experiment also includes an evidence heatmap generated
 from the same eval artifacts. It is intentionally a workbench, not just a
 chart: structural clusters follow the documentation path hierarchy, weak
-regions are visible by retrieval mode, a search field highlights matching
-sections/refs/questions, and the side panel pins the selected block's refs,
-metrics, and generated eval questions. The matching adaptation script
+regions are visible by retrieval mode and query layer, a search field
+highlights matching sections/refs/questions, and the side panel pins the
+selected block's refs, metrics, and generated eval questions. The query layer
+switch separates direct lexical questions from concern-style or adversarial
+wording, so "easy if you know the title" and "findable from a user problem"
+do not collapse into one average color. The matching adaptation script
 (`improve_fastapi_questions.py`) can review weak blocks, write shadow
 Doc2Query metadata, rerun affected-row mini-evals, and refresh the report.
+The run overview also includes deterministic data-smell diagnostics: query
+magnets, oversized regions, sparse retrieval views, exact/near duplicates, and
+potential conflict cue pairs. These are review targets, not automatic proof of
+bad data.
+
+For a reproducible style-aware FastAPI pass, use:
+
+```bash
+python -m refmark.cli run-pipeline examples/portable_search_index/fastapi_pipeline.styleaware.yaml
+```
+
+That config writes an explicit `question_plan.json` with direct, concern, and
+adversarial query requests before model generation. The resulting eval report
+splits metrics by `metadata.query_style`, making it clear whether weak blocks
+fail only under lower-overlap user wording or also under direct lookup.
 
 That loop is the product-shaped part of this example:
 

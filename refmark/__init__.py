@@ -2,7 +2,17 @@
 
 from refmark.citations import CitationRef, parse_citation_refs, validate_citation_refs
 from refmark.core import inject, strip
-from refmark.discovery import DiscoveryManifest, discover_corpus, load_discovery, write_discovery
+from refmark.discovery import (
+    DiscoveryContextCard,
+    DiscoveryManifest,
+    DiscoveryReviewIssue,
+    build_discovery_context_card,
+    discover_corpus,
+    load_discovery,
+    review_discovery,
+    write_discovery,
+)
+from refmark.feedback import FeedbackEvent, FeedbackReport, analyze_feedback, read_feedback_jsonl
 from refmark.documents import AlignmentReport, DocumentMap, align_documents, map_document
 from refmark.edit import apply_ref_diff
 from refmark.highlight import highlight_refs
@@ -25,12 +35,14 @@ from refmark.pipeline import (
     write_manifest,
 )
 from refmark.pipeline_config import (
+    DiscoveryConfig,
     EmbeddingConfig,
     FullPipelineConfig,
     ModelTierConfig,
     PipelineArtifactConfig,
     PipelineBudgetConfig,
     PipelineLoopConfig,
+    QuestionPlanConfig,
     default_full_pipeline_config,
     full_pipeline_config_from_dict,
     load_full_pipeline_config,
@@ -39,6 +51,7 @@ from refmark.pipeline_config import (
 from refmark.pipeline_runner import PipelineRunSummary, run_full_pipeline
 from refmark.prompt import EnrichedPrompt, build_reference_prompt
 from refmark.provenance import build_eval_provenance, file_fingerprint, validate_provenance
+from refmark.question_plan import QuestionPlanItem, build_question_plan, question_plan_to_dict
 from refmark.rag_eval import (
     ContextPack,
     CorpusMap,
@@ -55,6 +68,7 @@ from refmark.rag_eval import (
     selective_jump_diagnostics,
 )
 from refmark.refmarker import Refmarker, RefmarkRegistry, RefmarkResult
+from refmark.search_index import analyze_index_smells
 from refmark.workflow_config import WorkflowConfig, load_workflow_config, resolve_workflow_config
 
 __version__ = "0.1.0"
@@ -66,6 +80,7 @@ __all__ = [
     "EnrichedPrompt",
     "AlignmentCandidate",
     "AlignmentReport",
+    "analyze_index_smells",
     "CitationRef",
     "CoverageItem",
     "CorpusMap",
@@ -73,10 +88,15 @@ __all__ = [
     "CorpusRevisionDiff",
     "ContextPack",
     "DiscoveryManifest",
+    "DiscoveryContextCard",
+    "DiscoveryConfig",
+    "DiscoveryReviewIssue",
     "DocumentMap",
     "EvalExample",
     "EvalRun",
     "EvalSuite",
+    "FeedbackEvent",
+    "FeedbackReport",
     "EmbeddingConfig",
     "FullPipelineConfig",
     "ModelTierConfig",
@@ -85,12 +105,17 @@ __all__ = [
     "PipelineBudgetConfig",
     "PipelineLoopConfig",
     "PipelineRunSummary",
+    "QuestionPlanConfig",
+    "QuestionPlanItem",
     "RegionRecord",
     "SectionEntry",
     "align_region_records",
     "align_documents",
+    "analyze_feedback",
     "adaptation_recommendations",
     "build_region_manifest",
+    "build_discovery_context_card",
+    "build_question_plan",
     "build_section_map",
     "default_full_pipeline_config",
     "discover_corpus",
@@ -107,8 +132,10 @@ __all__ = [
     "map_document",
     "parse_citation_refs",
     "read_manifest",
+    "read_feedback_jsonl",
     "render_coverage_html",
     "render_coverage_report_html",
+    "review_discovery",
     "Refmarker",
     "RefmarkRegistry",
     "RefmarkResult",
@@ -117,6 +144,7 @@ __all__ = [
     "WorkflowConfig",
     "load_workflow_config",
     "resolve_workflow_config",
+    "question_plan_to_dict",
     "run_full_pipeline",
     "RefRangeScore",
     "RewardConfig",

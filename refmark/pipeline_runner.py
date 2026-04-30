@@ -14,10 +14,18 @@ import time
 from typing import Any, Iterable
 from urllib import request
 
-from refmark.discovery import discover_corpus, write_discovery
+from refmark.discovery import (
+    DiscoveryManifest,
+    build_discovery_context_card,
+    discover_corpus,
+    load_discovery,
+    review_discovery,
+    write_discovery,
+)
 from refmark.pipeline import build_section_map, write_manifest
 from refmark.pipeline_config import FullPipelineConfig, ModelTierConfig, load_full_pipeline_config
 from refmark.provenance import file_fingerprint
+from refmark.question_plan import QuestionPlanItem, build_question_plan, question_plan_to_dict
 from refmark.rag_eval import CorpusMap, EvalSuite
 from refmark.search_index import (
     OPENROUTER_CHAT_URL,
@@ -81,7 +89,8 @@ def run_full_pipeline(config_or_path: FullPipelineConfig | str | Path) -> Pipeli
         overwrite=config.artifacts.overwrite,
     )
 
-    _write_discovery_if_needed(config, records, artifacts["discovery"], notes)
+    discovery_stats = _write_discovery_if_needed(config, records, artifacts["discovery"], artifacts["discovery_review"], notes)
+    plan_stats = _write_question_plan_if_needed(config, records, artifacts["question_plan"], notes)
     question_stats = _write_questions_if_needed(config, records, artifacts["questions"], notes)
     index_stats = _write_index_if_needed(config, artifacts["index"], notes)
     browser_stats = _write_browser_if_needed(config, artifacts["index"], artifacts["browser_index"])
@@ -90,6 +99,8 @@ def run_full_pipeline(config_or_path: FullPipelineConfig | str | Path) -> Pipeli
     stats = {
         "regions": len(records),
         "questions": question_stats["questions"],
+        "discovery": discovery_stats,
+        "question_plan": plan_stats,
         "question_generation": question_stats,
         "index": index_stats,
         "browser_index": browser_stats,
@@ -114,6 +125,8 @@ def _artifact_paths(config: FullPipelineConfig) -> dict[str, Path]:
         "manifest": output / "corpus.refmark.jsonl",
         "sections": output / "sections.json",
         "discovery": output / "discovery.json",
+        "discovery_review": output / "discovery_review.json",
+        "question_plan": output / "question_plan.json",
         "questions": output / "eval_questions.jsonl",
         "index": output / "docs.index.json",
         "browser_index": output / "docs.browser.json",
@@ -138,12 +151,88 @@ def _load_or_map_records(config: FullPipelineConfig, manifest_path: Path, notes:
     return records
 
 
-def _write_discovery_if_needed(config: FullPipelineConfig, records, path: Path, notes: list[str]) -> None:
+def _write_discovery_if_needed(config: FullPipelineConfig, records, path: Path, review_path: Path, notes: list[str]) -> dict[str, Any]:
     if path.exists() and not config.artifacts.overwrite:
         notes.append(f"Reused discovery: {path}")
-        return
-    discovery = discover_corpus(records, mode="whole", source="local", model="local")
-    write_discovery(discovery, path)
+        discovery = load_discovery(path)
+    else:
+        discovery = discover_corpus(
+            records,
+            mode=config.discovery.mode,
+            source=config.discovery.source,
+            model=config.discovery.model,
+            endpoint=config.discovery.endpoint,
+            api_key_env=config.discovery.api_key_env,
+            max_input_tokens=config.discovery.max_input_tokens,
+            window_tokens=config.discovery.window_tokens,
+            overlap_regions=config.discovery.overlap_regions,
+        )
+        write_discovery(discovery, path)
+    review_issues = _write_discovery_review_if_needed(config, discovery, records, review_path, notes)
+    return {
+        "mode": discovery.mode,
+        "source": discovery.source,
+        "model": discovery.model,
+        "regions": discovery.regions,
+        "windows": len(discovery.windows),
+        "clusters": len(discovery.clusters),
+        "review_issues": len(review_issues),
+    }
+
+
+def _write_discovery_review_if_needed(
+    config: FullPipelineConfig,
+    discovery: DiscoveryManifest,
+    records,
+    path: Path,
+    notes: list[str],
+) -> list[dict[str, Any]]:
+    if not config.discovery.review_enabled:
+        return []
+    if path.exists() and not config.artifacts.overwrite:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        notes.append(f"Reused discovery review: {path}")
+        return list(payload.get("issues", []))
+    issues = review_discovery(discovery, records=records, max_issues=config.discovery.max_review_issues)
+    payload = {
+        "schema": "refmark.discovery_review.v1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "discovery": str(_artifact_paths(config)["discovery"]),
+        "issues": [issue.to_dict() for issue in issues],
+        "provenance": {
+            "config_hash": _json_hash(config.to_dict()),
+            "corpus_path": config.corpus_path,
+            "discovery_hash": _json_hash(discovery.to_dict()),
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload["issues"]
+
+
+def _write_question_plan_if_needed(config: FullPipelineConfig, records, path: Path, notes: list[str]) -> dict[str, Any]:
+    if path.exists() and not config.artifacts.overwrite:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        notes.append(f"Reused question plan: {path}")
+        return dict(payload.get("summary", {}))
+    selected = _sample_records(records, sample_size=config.loop.sample_size, seed=config.loop.seed)
+    discovery = load_discovery(_artifact_paths(config)["discovery"])
+    plan = build_question_plan(
+        discovery,
+        selected,
+        direct_per_region=config.question_plan.direct_per_region,
+        concern_per_region=config.question_plan.concern_per_region,
+        adversarial_per_region=config.question_plan.adversarial_per_region,
+        include_excluded=config.question_plan.include_excluded,
+    )
+    payload = question_plan_to_dict(plan)
+    payload["provenance"] = {
+        "config_hash": _json_hash(config.to_dict()),
+        "discovery": str(_artifact_paths(config)["discovery"]),
+        "sample_size": config.loop.sample_size,
+        "seed": config.loop.seed,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return dict(payload["summary"])
 
 
 def _write_questions_if_needed(config: FullPipelineConfig, records, path: Path, notes: list[str]) -> dict[str, Any]:
@@ -152,7 +241,13 @@ def _write_questions_if_needed(config: FullPipelineConfig, records, path: Path, 
         notes.append(f"Reused eval questions: {path}")
         return {"questions": len(rows), "reused": True, "generated": 0, "input_tokens": 0, "output_tokens": 0, "estimated_usd": 0.0}
 
-    selected = _sample_records(records, sample_size=config.loop.sample_size, seed=config.loop.seed)
+    discovery = load_discovery(_artifact_paths(config)["discovery"])
+    plan_by_ref = _read_question_plan(_artifact_paths(config)["question_plan"])
+    selected = [
+        record
+        for record in _sample_records(records, sample_size=config.loop.sample_size, seed=config.loop.seed)
+        if _stable_ref(record) in plan_by_ref
+    ]
     cache_path = Path(config.artifacts.question_cache)
     cache = _read_generation_cache(cache_path)
     generated_rows: list[dict[str, Any]] = []
@@ -161,16 +256,24 @@ def _write_questions_if_needed(config: FullPipelineConfig, records, path: Path, 
     provider_ready = _provider_ready(config.question_generation, notes)
 
     def one(record) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        key = _question_cache_key(record, config.question_generation)
+        card = build_discovery_context_card(discovery, record, records=records)
+        plan = plan_by_ref[_stable_ref(record)]
+        key = _question_cache_key(record, config.question_generation, card=card.to_dict(), plan=[item.to_dict() for item in plan])
         if key in cache:
-            return cache[key]["questions"], None
+            return _normalise_cached_questions(cache[key]["questions"], fallback_plan=plan), None
         if provider_ready:
-            questions, usage, error = _remote_questions(record, config.question_generation)
+            questions, usage, error = _remote_questions(
+                record,
+                config.question_generation,
+                discovery=discovery,
+                context_card=card.to_dict(),
+                plan=plan,
+            )
             if error:
-                questions = _local_questions(record)
+                questions = _local_questions(record, context_card=card.to_dict(), plan=plan)
                 usage["error"] = error
         else:
-            questions = _local_questions(record)
+            questions = _local_questions(record, context_card=card.to_dict(), plan=plan)
             usage = {"input_tokens": 0, "output_tokens": 0, "estimated_usd": 0.0, "source": "local"}
         update = {
             "cache_key": key,
@@ -178,6 +281,8 @@ def _write_questions_if_needed(config: FullPipelineConfig, records, path: Path, 
             "hash": record.hash,
             "prompt_version": QUESTION_PROMPT_VERSION,
             "model": config.question_generation.model if provider_ready else "local",
+            "context_card": card.to_dict(),
+            "question_plan": [item.to_dict() for item in plan],
             "questions": questions,
             "usage": usage,
         }
@@ -195,13 +300,24 @@ def _write_questions_if_needed(config: FullPipelineConfig, records, path: Path, 
                 stats["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
                 stats["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
                 stats["estimated_usd"] += float(usage.get("estimated_usd", 0.0) or 0.0)
-            for query in questions:
+            for question in questions:
+                query_text = str(question.get("query", "")).strip()
+                if not query_text:
+                    continue
+                query_style = str(question.get("query_style") or "unspecified")
                 generated_rows.append(
                     {
-                        "query": str(query),
+                        "query": query_text,
                         "gold_refs": [_stable_ref(record)],
                         "source_hashes": {_stable_ref(record): record.hash},
-                        "metadata": {"source": "refmark-full-pipeline", "style": "generated"},
+                        "metadata": {
+                            "source": "refmark-full-pipeline",
+                            "style": query_style,
+                            "query_style": query_style,
+                            "question_prompt_version": QUESTION_PROMPT_VERSION,
+                            "discovery_context_ref": _stable_ref(record),
+                            "question_plan": question.get("plan"),
+                        },
                     }
                 )
     _append_jsonl(cache_path, cache_updates)
@@ -268,16 +384,43 @@ def _write_eval_if_needed(config: FullPipelineConfig, corpus: CorpusMap, index_p
         },
     }
     report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return run.metrics
+    summary_metrics = dict(run.metrics)
+    summary_metrics["by_query_style"] = run.diagnostics.get("by_query_style", {})
+    summary_metrics["query_style_gap"] = run.diagnostics.get("query_style_gap", {})
+    return summary_metrics
 
 
-def _remote_questions(record, tier: ModelTierConfig) -> tuple[list[str], dict[str, Any], str | None]:
-    prompt = f"""Generate three natural software-documentation search queries for this evidence region.
+def _remote_questions(
+    record,
+    tier: ModelTierConfig,
+    *,
+    discovery: DiscoveryManifest,
+    context_card: dict[str, Any],
+    plan: list[QuestionPlanItem],
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    prompt = f"""Generate natural search queries for this evidence region.
 
 Return strict JSON only:
-{{"questions":["...","...","..."]}}
+{{"questions":[{{"query":"...","query_style":"direct"}},{{"query":"...","query_style":"concern"}},{{"query":"...","query_style":"adversarial"}}]}}
+
+Use the discovery context to vary question style and avoid generic phrasing.
+Prefer questions that a real target user of this corpus might ask. Do not cite
+the ref id in the question text. Keep every question answerable from the target
+region; if the context card says the region is navigation/boilerplate, generate
+only navigation-specific questions.
+
+Generate exactly the requested plan styles and counts. Style meanings:
+- direct: straightforward lookup using ordinary source terminology.
+- concern: user problem, goal, or symptom wording.
+- adversarial: valid paraphrase with lower lexical overlap, still unambiguous.
 
 Ref: {_stable_ref(record)}
+Discovery context:
+{json.dumps(context_card, ensure_ascii=False)}
+
+Question plan:
+{json.dumps([item.to_dict() for item in plan], ensure_ascii=False)}
+
 Text:
 {record.text}
 """
@@ -310,10 +453,10 @@ Text:
                 response_payload = json.loads(response.read().decode("utf-8"))
             content = response_payload["choices"][0]["message"]["content"]
             parsed = _parse_json_object(content)
-            questions = [str(item).strip() for item in parsed.get("questions", []) if str(item).strip()]
+            questions = _normalise_cached_questions(parsed.get("questions", []), fallback_plan=plan)
             if questions:
                 output_tokens = approx_tokens(content)
-                return questions[:3], _usage(input_tokens, output_tokens, tier, source="remote"), None
+                return questions[: sum(item.count for item in plan)], _usage(input_tokens, output_tokens, tier, source="remote"), None
         except Exception as exc:
             error = str(exc)
             time.sleep(min(2 ** attempt, 8))
@@ -321,9 +464,57 @@ Text:
     return [], _usage(input_tokens, output_tokens, tier, source="remote"), error or "empty response"
 
 
-def _local_questions(record) -> list[str]:
+def _local_questions(
+    record,
+    *,
+    context_card: dict[str, Any] | None = None,
+    plan: list[QuestionPlanItem] | None = None,
+) -> list[dict[str, Any]]:
     view = local_view(record.text, questions_per_region=3, keywords_per_region=6)
-    return view.questions or [f"What does {_stable_ref(record)} explain?"]
+    if not context_card:
+        queries = view.questions or [f"What does {_stable_ref(record)} explain?"]
+        return [{"query": query, "query_style": "direct", "plan": None} for query in queries]
+    terms = [str(item) for item in context_card.get("terms", []) if str(item).strip()]
+    families = [str(item) for item in context_card.get("query_families", []) if str(item).strip()]
+    roles = set(str(item) for item in context_card.get("roles", []))
+    topic = ", ".join(terms[:3]) if terms else (context_card.get("region_summary") or _stable_ref(record))
+    planned = plan or [
+        QuestionPlanItem(stable_ref=_stable_ref(record), query_style="direct", terms=terms, roles=list(roles)),
+        QuestionPlanItem(stable_ref=_stable_ref(record), query_style="concern", terms=terms, roles=list(roles)),
+        QuestionPlanItem(stable_ref=_stable_ref(record), query_style="adversarial", terms=terms, roles=list(roles)),
+    ]
+    output: list[dict[str, Any]] = []
+    for item in planned:
+        for query in _local_queries_for_style(item.query_style, topic, terms, roles, families, view.questions)[: item.count]:
+            output.append({"query": query, "query_style": item.query_style, "plan": item.to_dict()})
+    return output or [{"query": f"What does {_stable_ref(record)} explain?", "query_style": "direct", "plan": None}]
+
+
+def _local_queries_for_style(
+    style: str,
+    topic: str,
+    terms: list[str],
+    roles: set[str],
+    families: list[str],
+    fallback_questions: list[str],
+) -> list[str]:
+    if style == "direct":
+        questions = [f"What does this section explain about {topic}?"]
+        if "definition" in roles:
+            questions.append(f"What does {terms[0] if terms else 'this term'} mean in this corpus?")
+        elif "obligation" in roles:
+            questions.append(f"What is required for {topic}?")
+        else:
+            questions.extend(fallback_questions[:1])
+        return _dedupe(questions)
+    if style == "concern":
+        if families:
+            concern = families[0].replace("questions about ", "")
+            return [f"Where should I look for guidance when I need help with {concern}?"]
+        return [f"Where should I look if I have a practical problem involving {topic}?"]
+    if style == "adversarial":
+        return ["Which part of the docs covers the underlying rule or behavior for this topic?"]
+    return [f"Where should I look for guidance on {topic}?"]
 
 
 def _usage(input_tokens: int, output_tokens: int, tier: ModelTierConfig, *, source: str) -> dict[str, Any]:
@@ -346,17 +537,79 @@ def _provider_ready(tier: ModelTierConfig, notes: list[str]) -> bool:
     return True
 
 
-def _question_cache_key(record, tier: ModelTierConfig) -> str:
+def _question_cache_key(
+    record,
+    tier: ModelTierConfig,
+    *,
+    card: dict[str, Any] | None = None,
+    plan: list[dict[str, Any]] | None = None,
+) -> str:
     payload = {
         "prompt_version": QUESTION_PROMPT_VERSION,
         "stable_ref": _stable_ref(record),
         "hash": record.hash,
+        "discovery_context_hash": _json_hash(card or {}),
+        "question_plan_hash": _json_hash(plan or []),
         "provider": tier.provider,
         "model": tier.model,
         "temperature": tier.temperature,
         "max_tokens": tier.max_tokens,
     }
     return _json_hash(payload)
+
+
+def _read_question_plan(path: Path) -> dict[str, list[QuestionPlanItem]]:
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    grouped: dict[str, list[QuestionPlanItem]] = {}
+    for item in payload.get("items", []):
+        plan_item = QuestionPlanItem(
+            stable_ref=str(item["stable_ref"]),
+            query_style=str(item["query_style"]),
+            count=int(item.get("count", 1)),
+            gold_refs=[str(ref) for ref in item.get("gold_refs", [])],
+            roles=[str(role) for role in item.get("roles", [])],
+            terms=[str(term) for term in item.get("terms", [])],
+            guidance=[str(value) for value in item.get("guidance", [])],
+        )
+        grouped.setdefault(plan_item.stable_ref, []).append(plan_item)
+    return grouped
+
+
+def _normalise_cached_questions(
+    raw_questions: Any,
+    *,
+    fallback_plan: list[QuestionPlanItem] | None = None,
+) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+    if not isinstance(raw_questions, list):
+        return questions
+    fallback_styles = _expanded_plan_styles(fallback_plan)
+    for index, item in enumerate(raw_questions):
+        if isinstance(item, dict):
+            query = str(item.get("query", "")).strip()
+            if query:
+                style = str(item.get("query_style") or item.get("style") or "").strip()
+                fallback_style = fallback_styles[min(index, len(fallback_styles) - 1)] if fallback_styles else "unspecified"
+                questions.append(
+                    {
+                        "query": query,
+                        "query_style": style or fallback_style,
+                        "plan": item.get("plan"),
+                    }
+                )
+        else:
+            query = str(item).strip()
+            if query:
+                style = fallback_styles[min(index, len(fallback_styles) - 1)] if fallback_styles else ("direct", "concern", "adversarial")[min(index, 2)]
+                questions.append({"query": query, "query_style": style, "plan": None})
+    return questions
+
+
+def _expanded_plan_styles(plan: list[QuestionPlanItem] | None) -> list[str]:
+    styles: list[str] = []
+    for item in plan or []:
+        styles.extend([item.query_style] * max(item.count, 1))
+    return styles
 
 
 def _sample_records(records, *, sample_size: int, seed: int):
@@ -441,3 +694,14 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("Expected JSON object.")
     return parsed
+
+
+def _dedupe(values: Iterable[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output

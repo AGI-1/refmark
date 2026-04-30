@@ -27,7 +27,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from refmark.search_index import OPENROUTER_CHAT_URL, PortableBM25Index, RetrievalView, SearchHit, SearchRegion, approx_tokens, load_search_index
+from refmark.search_index import OPENROUTER_CHAT_URL, PortableBM25Index, RetrievalView, SearchHit, SearchRegion, analyze_index_smells, approx_tokens, load_search_index
 
 
 BASE = Path("examples/portable_search_index/output/fastapi_pipeline_qwen_mistral")
@@ -85,9 +85,11 @@ def main() -> None:
         print("No weak covered targets found.")
         return
 
+    shadow_path = Path(args.shadow_metadata)
+    current_shadow_metadata = load_shadow_metadata(shadow_path)
     by_stable_ref = group_questions(questions)
     review_inputs = [
-        build_review_input(target, by_stable_ref.get(target, []), old_eval, index)
+        build_review_input(target, by_stable_ref.get(target, []), old_eval, index, shadow_metadata=current_shadow_metadata)
         for target in targets
         if by_stable_ref.get(target)
     ]
@@ -111,8 +113,6 @@ def main() -> None:
     )
     candidate_questions = copy.deepcopy(questions)
     changed = apply_replacements(candidate_questions, repair_jobs, replacements)
-    shadow_path = Path(args.shadow_metadata)
-    current_shadow_metadata = load_shadow_metadata(shadow_path)
     candidate_shadow_metadata = merge_shadow_metadata(
         current_shadow_metadata,
         build_shadow_metadata(reviews, candidate_questions, index),
@@ -122,6 +122,16 @@ def main() -> None:
     mini_eval = None
     accepted = True
     if (changed or metadata_changed) and not args.no_mini_eval:
+        ensure_query_embeddings(candidate_questions, Path(args.embedding_cache), api_key=api_key, workers=args.concurrency)
+        ensure_query_embeddings(candidate_questions, adaptive_embedding_cache_path(Path(args.embedding_cache)), api_key=api_key, workers=args.concurrency)
+        if metadata_changed:
+            ensure_adaptive_document_embeddings(
+                index,
+                candidate_shadow_metadata,
+                adaptive_embedding_cache_path(Path(args.embedding_cache)),
+                api_key=api_key,
+                workers=args.concurrency,
+            )
         mini_eval = affected_mini_eval(
             index,
             original_questions,
@@ -223,7 +233,14 @@ def select_weak_targets(eval_payload: dict[str, Any], *, limit: int) -> list[str
     return [ref for *_scores, ref in ranked[:limit]]
 
 
-def build_review_input(stable_ref: str, qrows: list[dict[str, Any]], eval_payload: dict[str, Any], index: PortableBM25Index) -> dict[str, Any]:
+def build_review_input(
+    stable_ref: str,
+    qrows: list[dict[str, Any]],
+    eval_payload: dict[str, Any],
+    index: PortableBM25Index,
+    *,
+    shadow_metadata: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     ref_to_region = {region.stable_ref: region for region in index.regions}
     gold_refs = list(dict.fromkeys(ref for row in qrows for ref in row.get("gold_refs", [])))
     gold_text = "\n\n".join(
@@ -254,6 +271,7 @@ def build_review_input(stable_ref: str, qrows: list[dict[str, Any]], eval_payloa
         for ref in competing_refs
         if ref in ref_to_region
     )
+    context_refs = list(dict.fromkeys([stable_ref, *gold_refs, *competing_refs]))
     return {
         "stable_ref": stable_ref,
         "section_title": qrows[0].get("section_title"),
@@ -265,6 +283,8 @@ def build_review_input(stable_ref: str, qrows: list[dict[str, Any]], eval_payloa
         "observed": observed,
         "gold_text": gold_text,
         "competing_text": competing_text,
+        "shadow_metadata": metadata_context_for_refs(shadow_metadata or {}, context_refs),
+        "data_smells": smell_context_for_refs(index, context_refs),
     }
 
 
@@ -283,6 +303,7 @@ Adaptation action vocabulary:
 - merge_or_link_regions: adjacent/duplicate/equivalent sections behave as one concept.
 - mark_excluded_or_hub: TOC/index/release/hub/query-magnet should be excluded or role-marked.
 - record_confusion_pair: wrong top ref is a meaningful repeated confusion edge.
+- record_data_smell: duplicated, contradictory, stale, or metadata-noisy data should be reviewed.
 - tune_retriever: question is valid, gold is valid, retrieval/ranking needs better signals.
 - keep_valid_hard_case: no adaptation now besides tracking.
 
@@ -293,7 +314,7 @@ Return strict JSON:
     {{"action":"...", "confidence":0.0, "refs":["..."], "reason":"...", "apply_automatically":false}}
   ],
   "items": [
-    {{"variant":"direct|concern", "action":"keep|regenerate", "diagnosis":"query_drift|ambiguous|gold_too_broad|retrieval_failure|valid_hard_case|alternate_gold|query_magnet|range_too_broad|range_too_narrow", "reason":"...", "replacement_brief":"...", "suggested_area_actions":["..."]}}
+    {{"variant":"direct|concern", "action":"keep|regenerate", "diagnosis":"query_drift|ambiguous|gold_too_broad|retrieval_failure|valid_hard_case|alternate_gold|query_magnet|range_too_broad|range_too_narrow|duplicate_data|contradictory_data|metadata_noise", "reason":"...", "replacement_brief":"...", "suggested_area_actions":["..."]}}
   ]
 }}
 
@@ -312,6 +333,12 @@ Gold evidence:
 
 Competing top evidence:
 {item["competing_text"]}
+
+Current shadow metadata for gold/competing refs:
+{json.dumps(item.get("shadow_metadata", {}), ensure_ascii=False)}
+
+Data-smell candidates touching gold/competing refs:
+{json.dumps(item.get("data_smells", {}), ensure_ascii=False)}
 """
     payload = chat_json(
         model=model,
@@ -348,6 +375,8 @@ def build_adaptation_plan(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]
                     item_actions = ["add_alternate_gold_refs"]
                 elif diagnosis == "query_magnet":
                     item_actions = ["mark_excluded_or_hub"]
+                elif diagnosis in {"duplicate_data", "contradictory_data", "metadata_noise"}:
+                    item_actions = ["record_data_smell"]
                 elif diagnosis == "retrieval_failure":
                     item_actions = ["tune_retriever"]
             for action_name in item_actions:
@@ -396,6 +425,8 @@ def adaptation_type(action: str) -> str:
         return "exclusion_or_role"
     if action == "record_confusion_pair":
         return "confusion_mapping"
+    if action == "record_data_smell":
+        return "data_smell"
     if action == "tune_retriever":
         return "retriever"
     return "tracking"
@@ -416,11 +447,65 @@ def dedupe_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "region_boundary": 2,
         "exclusion_or_role": 3,
         "confusion_mapping": 4,
-        "retriever": 5,
-        "tracking": 6,
+        "data_smell": 5,
+        "retriever": 6,
+        "tracking": 7,
     }
     deduped.sort(key=lambda row: (order.get(str(row.get("adaptation_type")), 9), str(row.get("target_ref")), str(row.get("action"))))
     return deduped
+
+
+def metadata_context_for_refs(metadata: dict[str, dict[str, Any]], refs: list[str]) -> dict[str, dict[str, Any]]:
+    out = {}
+    for ref in refs:
+        entry = metadata.get(ref) or metadata.get(range_ref_for_region(ref, metadata))
+        if not entry:
+            continue
+        out[ref] = compact_shadow_metadata(entry)
+    return out
+
+
+def compact_shadow_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "roles": entry.get("roles", [])[:8],
+        "doc2query": entry.get("doc2query", [])[:10],
+        "keywords": entry.get("keywords", [])[:18],
+        "disambiguators": entry.get("disambiguators", [])[:8],
+        "confusions": entry.get("confusions", [])[:12],
+        "source_hashes": entry.get("source_hashes", {}),
+        "provenance": entry.get("provenance", {}),
+    }
+
+
+def smell_context_for_refs(index: PortableBM25Index, refs: list[str]) -> dict[str, Any]:
+    ref_set = set(refs)
+    smells = analyze_index_smells(index, max_pairs=50)
+    return {
+        "query_magnets": [
+            row for row in smells.get("query_magnets", [])
+            if row.get("stable_ref") in ref_set
+        ],
+        "oversized_regions": [
+            row for row in smells.get("oversized_regions", [])
+            if row.get("stable_ref") in ref_set
+        ],
+        "sparse_retrieval_views": [
+            row for row in smells.get("sparse_retrieval_views", [])
+            if row.get("stable_ref") in ref_set
+        ],
+        "exact_duplicate_groups": [
+            row for row in smells.get("exact_duplicate_groups", [])
+            if ref_set & set(row.get("refs", []))
+        ],
+        "duplicate_candidates": [
+            row for row in smells.get("duplicate_candidates", [])
+            if row.get("left_ref") in ref_set or row.get("right_ref") in ref_set
+        ],
+        "potential_conflicts": [
+            row for row in smells.get("potential_conflicts", [])
+            if row.get("left_ref") in ref_set or row.get("right_ref") in ref_set
+        ],
+    }
 
 
 def affected_mini_eval(
@@ -435,6 +520,8 @@ def affected_mini_eval(
 ) -> dict[str, Any]:
     before_rows = affected_questions(before_questions, affected_refs)
     after_rows = affected_questions(after_questions, affected_refs)
+    before_blast_rows = blast_radius_questions(before_questions, affected_refs)
+    after_blast_rows = matching_questions(after_questions, before_blast_rows)
     before_eval = evaluate_modes(
         index,
         before_rows,
@@ -453,15 +540,51 @@ def affected_mini_eval(
     )
     before_score = acceptance_tuple(before_eval)
     after_score = acceptance_tuple(after_eval)
-    accepted = after_score >= before_score
+    blast_radius = None
+    blast_regressed = False
+    if before_blast_rows and after_blast_rows:
+        before_blast_eval = evaluate_modes(
+            index,
+            before_blast_rows,
+            embedding_cache,
+            shadow_metadata=before_metadata,
+            index_path="mini-eval:index",
+            questions_path="mini-eval:blast-before",
+        )
+        after_blast_eval = evaluate_modes(
+            index,
+            after_blast_rows,
+            embedding_cache,
+            shadow_metadata=after_metadata,
+            index_path="mini-eval:index",
+            questions_path="mini-eval:blast-after",
+        )
+        before_blast_score = acceptance_tuple(before_blast_eval)
+        after_blast_score = acceptance_tuple(after_blast_eval)
+        blast_regressed = after_blast_score < before_blast_score
+        blast_radius = {
+            "rows": len(after_blast_rows),
+            "primary_method": primary_method(after_blast_eval),
+            "before_score": before_blast_score,
+            "after_score": after_blast_score,
+            "regressed": blast_regressed,
+            "before_metrics": {name: payload["metrics"] for name, payload in before_blast_eval["methods"].items()},
+            "after_metrics": {name: payload["metrics"] for name, payload in after_blast_eval["methods"].items()},
+        }
+    accepted = after_score >= before_score and not blast_regressed
     return {
         "affected_refs": affected_refs,
         "rows": len(after_rows),
         "primary_method": primary_method(after_eval),
         "before_score": before_score,
         "after_score": after_score,
+        "blast_radius_probe": blast_radius,
         "decision": "accepted" if accepted else "rejected",
-        "reason": "accepted because affected-row metrics did not regress" if accepted else "rejected because affected-row metrics regressed",
+        "reason": (
+            "accepted because affected-row metrics did not regress and blast-radius probe stayed stable"
+            if accepted
+            else "rejected because affected-row metrics or blast-radius probe regressed"
+        ),
         "before_metrics": {name: payload["metrics"] for name, payload in before_eval["methods"].items()},
         "after_metrics": {name: payload["metrics"] for name, payload in after_eval["methods"].items()},
     }
@@ -473,6 +596,31 @@ def affected_questions(rows: list[dict[str, Any]], refs: list[str]) -> list[dict
         row
         for row in rows
         if row.get("stable_ref") in ref_set or any(ref in ref_set for ref in row.get("gold_refs", []))
+    ]
+
+
+def blast_radius_questions(rows: list[dict[str, Any]], refs: list[str], *, limit: int = 80) -> list[dict[str, Any]]:
+    """Pick a deterministic sample of unaffected rows to catch global metadata regressions."""
+
+    ref_set = set(refs)
+    candidates = [
+        row
+        for row in rows
+        if row.get("stable_ref") not in ref_set and not any(ref in ref_set for ref in row.get("gold_refs", []))
+    ]
+    candidates.sort(key=lambda row: hash_text(f"{row.get('stable_ref')}|{row.get('variant')}|{row.get('query')}"))
+    return candidates[:limit]
+
+
+def matching_questions(rows: list[dict[str, Any]], selected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    wanted = {
+        (row.get("stable_ref"), row.get("variant"), row.get("query"))
+        for row in selected
+    }
+    return [
+        row
+        for row in rows
+        if (row.get("stable_ref"), row.get("variant"), row.get("query")) in wanted
     ]
 
 
@@ -986,16 +1134,26 @@ def update_heatmap(
     index: PortableBM25Index | None = None,
     questions: list[dict[str, Any]] | None = None,
 ) -> None:
-    if path.exists():
-        html = path.read_text(encoding="utf-8")
-    elif HEATMAP_TEMPLATE.exists():
+    existing_html = path.read_text(encoding="utf-8") if path.exists() else ""
+    if HEATMAP_TEMPLATE.exists():
         html = HEATMAP_TEMPLATE.read_text(encoding="utf-8")
+    elif path.exists():
+        html = existing_html
     else:
         return
     data_match = re.search(r"const DATA=(.*?);\s*const SUMMARY=(.*?);\nconst canvas=", html, flags=re.S)
     if not data_match:
         return
     data = json.loads(_repair_js_json(data_match.group(1)))
+    if existing_html and HEATMAP_TEMPLATE.exists():
+        existing_match = re.search(r"const DATA=(.*?);\s*const SUMMARY=(.*?);\nconst canvas=", existing_html, flags=re.S)
+        if existing_match:
+            try:
+                existing_data = json.loads(_repair_js_json(existing_match.group(1)))
+            except json.JSONDecodeError:
+                existing_data = []
+            if existing_data:
+                data = existing_data
     if not data and index is not None:
         data = heatmap_data_from_index(index, questions or [])
     method_results = {
@@ -1009,13 +1167,28 @@ def update_heatmap(
         method_results[method] = grouped
     for item in data:
         metrics = {}
+        metrics_by_variant = {}
         for method, grouped in method_results.items():
             rows = grouped.get(item["range_ref"], [])
             metrics[method] = section_metrics(rows)
+            metrics_by_variant[method] = section_metrics_by_variant(rows)
         item["metrics"] = metrics
+        item["metrics_by_variant"] = metrics_by_variant
     summary = json.loads(_repair_js_json(data_match.group(2)))
     summary["modeSummary"] = {method: payload["metrics"] for method, payload in eval_payload["methods"].items()}
     summary["modeLabels"] = {method: payload.get("name", method) for method, payload in eval_payload["methods"].items()}
+    summary["modeSummaryByVariant"] = {
+        method: section_metrics_by_variant(payload["results"])
+        for method, payload in eval_payload["methods"].items()
+    }
+    variants = {
+        variant_key(row)
+        for payload in eval_payload["methods"].values()
+        for row in payload["results"]
+    }
+    summary["variants"] = sorted(variants)
+    if index is not None:
+        summary["dataSmells"] = heatmap_data_smells(index, data)
     replacement = "const DATA=" + json.dumps(data, ensure_ascii=False) + "; const SUMMARY=" + json.dumps(summary, ensure_ascii=False) + ";\nconst canvas="
     html = html[: data_match.start()] + replacement + html[data_match.end() :]
     html = replace_weak_table(html, data, default_mode="hybrid_qwen3_w035")
@@ -1050,6 +1223,30 @@ def heatmap_data_from_index(index: PortableBM25Index, questions: list[dict[str, 
             }
         )
     return rows
+
+
+def heatmap_data_smells(index: PortableBM25Index, data: list[dict[str, Any]]) -> dict[str, Any]:
+    smells = analyze_index_smells(index)
+    heatmap_magnets = [
+        {
+            "kind": "query_magnet",
+            "stable_ref": item.get("range_ref"),
+            "doc_id": item.get("doc_id"),
+            "source_path": item.get("source_path"),
+            "tokens": item.get("tokens", 0),
+            "roles": item.get("roles", []),
+            "reason": "; ".join(item.get("exclusion_reasons", [])) or "excluded from default heatmap/search",
+            "snippet": item.get("title", ""),
+        }
+        for item in data
+        if item.get("excluded")
+    ]
+    if heatmap_magnets:
+        smells["query_magnets"] = heatmap_magnets[:25]
+        summary = dict(smells.get("summary", {}))
+        summary["query_magnets"] = len(heatmap_magnets)
+        smells["summary"] = summary
+    return smells
 
 
 def doc_label_for_region(region: SearchRegion) -> str:
@@ -1141,6 +1338,19 @@ def section_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if not r.get("hit_at_k")
         ][:3],
     }
+
+
+def section_metrics_by_variant(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(variant_key(row), []).append(row)
+    return {variant: section_metrics(variant_rows) for variant, variant_rows in sorted(grouped.items())}
+
+
+def variant_key(row: dict[str, Any]) -> str:
+    metadata = row.get("metadata")
+    metadata_style = metadata.get("style") if isinstance(metadata, dict) else None
+    return str(row.get("variant") or metadata_style or "query")
 
 
 if __name__ == "__main__":

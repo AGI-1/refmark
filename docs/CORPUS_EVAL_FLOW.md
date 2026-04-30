@@ -37,6 +37,31 @@ candidate ranges, and training exclusions. Local discovery is deterministic;
 model-backed discovery can be run with `--source openrouter` when a whole corpus
 or section fits in context.
 
+For larger corpora, use region-safe windowed discovery:
+
+```bash
+python -m refmark.cli discover corpus.refmark.jsonl \
+  -o corpus.discovery.json \
+  --mode windowed \
+  --window-tokens 40000 \
+  --overlap-regions 2
+```
+
+Review the discovery artifact before it drives generated questions:
+
+```bash
+python -m refmark.cli review-discovery corpus.discovery.json \
+  --manifest corpus.refmark.jsonl \
+  -o corpus.discovery_review.json
+```
+
+For a specific target, inspect the compact generation context card:
+
+```bash
+python -m refmark.cli discovery-card corpus.refmark.jsonl corpus.discovery.json \
+  --ref guide.md:P03
+```
+
 For the broader loop and hierarchical plan, see
 `docs/DISCOVERY_ADAPT_LOOP.md`.
 

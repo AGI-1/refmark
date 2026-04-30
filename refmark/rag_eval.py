@@ -366,6 +366,7 @@ class EvalExampleResult:
     query: str
     gold_refs: list[str]
     gold_mode: str
+    query_style: str
     retrieved_refs: list[str]
     context_refs: list[str]
     hit_at_1: bool
@@ -490,6 +491,7 @@ def _evaluate_example(example: EvalExample, corpus: CorpusMap, retriever: Retrie
         query=example.query,
         gold_refs=gold_refs,
         gold_mode=_gold_mode(example, gold_refs),
+        query_style=_query_style(example),
         retrieved_refs=retrieved_refs,
         context_refs=context_refs,
         hit_at_1=bool(hits and set(hits[0].context_refs or [hits[0].stable_ref]) & gold_set),
@@ -536,6 +538,27 @@ def _summarize_by_gold_mode(results: list[EvalExampleResult]) -> dict[str, dict[
     return {mode: _summarize_results(items) for mode, items in sorted(grouped.items())}
 
 
+def _summarize_by_query_style(results: list[EvalExampleResult]) -> dict[str, dict[str, float]]:
+    grouped: dict[str, list[EvalExampleResult]] = defaultdict(list)
+    for result in results:
+        grouped[result.query_style].append(result)
+    return {style: _summarize_results(items) for style, items in sorted(grouped.items())}
+
+
+def query_style_gap(results: list[EvalExampleResult]) -> dict[str, Any]:
+    """Return cross-style deltas so easy direct queries cannot hide hard styles."""
+
+    by_style = _summarize_by_query_style(results)
+    return {
+        "styles": sorted(by_style),
+        "hit_at_1_gap": _metric_gap(by_style, "hit_at_1"),
+        "hit_at_k_gap": _metric_gap(by_style, "hit_at_k"),
+        "mrr_gap": _metric_gap(by_style, "mrr"),
+        "weakest_by_hit_at_1": _weakest_metric(by_style, "hit_at_1"),
+        "weakest_by_hit_at_k": _weakest_metric(by_style, "hit_at_k"),
+    }
+
+
 def diagnose_results(
     results: list[EvalExampleResult],
     *,
@@ -548,6 +571,8 @@ def diagnose_results(
     return {
         "heatmap": heatmap,
         "by_gold_mode": _summarize_by_gold_mode(results),
+        "by_query_style": _summarize_by_query_style(results),
+        "query_style_gap": query_style_gap(results),
         "selective_jump": selective_jump_diagnostics(results),
         "adaptation": adaptation_recommendations(heatmap),
     }
@@ -563,6 +588,14 @@ def _gold_mode(example: EvalExample, expanded_gold_refs: list[str]) -> str:
     if len(expanded_gold_refs) <= 1:
         return "single"
     return "distributed"
+
+
+def _query_style(example: EvalExample) -> str:
+    for key in ("query_style", "variant", "style", "source"):
+        value = example.metadata.get(key)
+        if value:
+            return str(value)
+    return "unspecified"
 
 
 def failure_heatmap(
@@ -594,6 +627,7 @@ def failure_heatmap(
             samples[primary_gold].append(
                 {
                     "query": result.query,
+                    "query_style": result.query_style,
                     "gold_refs": result.gold_refs,
                     "top_ref": result.top_ref,
                     "retrieved_refs": result.retrieved_refs[:5],
@@ -769,6 +803,18 @@ def _literal_refs_from_gold(gold_refs: Iterable[str]) -> list[str]:
 def _mean(values: Iterable[float]) -> float:
     items = list(values)
     return sum(items) / len(items) if items else 0.0
+
+
+def _metric_gap(by_group: dict[str, dict[str, float]], metric: str) -> float:
+    values = [float(row.get(metric, 0.0)) for row in by_group.values()]
+    return max(values) - min(values) if values else 0.0
+
+
+def _weakest_metric(by_group: dict[str, dict[str, float]], metric: str) -> dict[str, Any] | None:
+    if not by_group:
+        return None
+    style, metrics = min(by_group.items(), key=lambda item: (float(item[1].get(metric, 0.0)), item[0]))
+    return {"style": style, "value": float(metrics.get(metric, 0.0))}
 
 
 def _as_float(value: Any) -> float | None:

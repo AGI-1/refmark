@@ -27,6 +27,8 @@ search, Refmark-enriched retrieval metadata, and optional embeddings.
   `examples/portable_search_index/output/fastapi_pipeline`
 - Qwen/Mistral output and caches:
   `examples/portable_search_index/output/fastapi_pipeline_qwen_mistral`
+- Style-aware clean output and fixed comparison suite:
+  `examples/portable_search_index/output/fastapi_pipeline_styleaware_clean`
 
 Generated output directories are ignored and should not be committed.
 
@@ -60,33 +62,94 @@ hit@10 as `hit_at_k`.
 | Local Refmark/BM25 rerank | 480 | 0.469 | 0.773 | 0.561 |
 | Enriched Refmark/BM25 rerank | 480 | 0.598 | 0.902 | 0.706 |
 
-The 160-question comparison run dedupes the generated question cache to one
-active question per target. It compares lexical, embedding, and hybrid
-approaches over the same corpus and refs.
+## Style-Aware Question Planning
+
+A later run made question generation explicit before calling the model. Each
+selected non-excluded region received one planned `direct`, one `concern`, and
+one `adversarial` query request. The run used:
+
+- Config: `examples/portable_search_index/fastapi_pipeline.styleaware.yaml`
+- Output: `examples/portable_search_index/output/fastapi_pipeline_styleaware_clean`
+- Corpus: 689 regions, 150 docs, about 309k source tokens.
+- Discovery: windowed local discovery, 8 region-safe windows.
+- Default-excluded refs: 135 release-note/query-magnet regions skipped from
+  question planning.
+- Generated eval rows: 336, balanced as 112 per style.
+- Question generation spend: about `$0.0082` estimated.
+
+The first style-aware run exposed a useful bug: release notes were excluded by
+the search index, but local discovery had not marked every release-note region
+as excluded from question planning. That created gold refs the default retriever
+was intentionally not allowed to return. Discovery now imports the same
+query-magnet/default-search-exclusion role policy used by the index.
+
+Clean style-aware rerank results:
+
+| Query style | Questions | Region hit@1 | Region hit@10 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| Direct | 112 | 0.589 | 0.911 | 0.708 |
+| Concern | 112 | 0.518 | 0.821 | 0.618 |
+| Adversarial | 112 | 0.330 | 0.670 | 0.453 |
+| Overall | 336 | 0.479 | 0.801 | 0.593 |
+
+Interpretation: direct lexical lookup is mostly solved by the enriched BM25
+stack, concern-style user wording remains decent, and lower-overlap adversarial
+paraphrases are the main weakness. The style split is therefore not cosmetic:
+it tells the adaptation loop whether to add metadata/query rewrites, improve
+range boundaries, or compare a semantic embedding/hybrid teacher.
+
+Weak zones in the clean run included:
+
+| Area | Rows | Region hit@10 | Observed smell |
+| --- | ---: | ---: | --- |
+| `reference/parameters` | 3 | 0.000 | broad parameter-class queries confuse nearby reference pages |
+| `index` | 6 | 0.167 | overview/index regions are weak gold targets and often better treated as parent/article navigation |
+| `advanced/sub-applications` | 3 | 0.333 | API-docs wording competes with OpenAPI/reference pages |
+| `tutorial/body/multiple-params` | 6 | 0.333 | adjacent same-article snippets compete; range/neighbor scoring likely better than exact single-ref |
+| `tutorial/index` | 6 | 0.333 | generic onboarding wording attracts feature/history/deployment pages |
+| `advanced/python-types` | 6 | 0.500 | concern wording maps to general Python types instead of advanced type pages |
+
+The fixed style-aware comparison uses the exported `eval_questions.jsonl`
+directly: 336 rows, balanced as 112 direct, 112 concern, and 112 adversarial
+questions. It compares lexical, embedding, and hybrid approaches over the same
+corpus and refs.
 
 | Method | Region hit@1 | Region hit@10 | Article hit@1 | Article hit@10 | Region MRR |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Local BM25 | 0.356 | 0.694 | 0.606 | 0.894 | 0.460 |
-| Refmark-enriched BM25 | 0.506 | 0.856 | 0.756 | 0.963 | 0.631 |
-| Local hashed embedding | 0.213 | 0.500 | 0.325 | 0.694 | 0.290 |
-| Refmark hashed embedding | 0.319 | 0.644 | 0.544 | 0.850 | 0.411 |
-| Local OpenAI small embedding | 0.450 | 0.881 | 0.750 | 0.981 | 0.584 |
-| Refmark OpenAI small embedding | 0.463 | 0.888 | 0.788 | 0.981 | 0.606 |
-| Refmark BM25 + OpenAI small embedding | 0.563 | 0.888 | 0.800 | 0.969 | 0.670 |
-| Local Qwen3 embedding | 0.469 | 0.869 | 0.769 | 0.988 | 0.616 |
-| Refmark Qwen3 embedding | 0.550 | 0.900 | 0.806 | 0.988 | 0.668 |
-| Refmark BM25 + Qwen3 embedding, best weight | 0.588 | 0.894 | 0.813 | 0.981 | 0.694 |
+| Local BM25 | 0.372 | 0.691 | 0.616 | 0.845 | 0.478 |
+| Refmark-enriched BM25 | 0.497 | 0.821 | 0.694 | 0.926 | 0.607 |
+| Local hashed embedding | 0.241 | 0.542 | 0.381 | 0.747 | 0.331 |
+| Refmark hashed embedding | 0.319 | 0.658 | 0.485 | 0.777 | 0.431 |
+| Local Qwen3 embedding | 0.563 | 0.929 | 0.747 | 0.982 | 0.694 |
+| Refmark Qwen3 embedding | 0.607 | 0.946 | 0.792 | 0.976 | 0.727 |
+| Refmark BM25 + Qwen3 embedding, weight 0.10 | 0.625 | 0.961 | 0.816 | 0.985 | 0.741 |
+| Refmark BM25 + Qwen3 embedding, weight 0.25 | 0.607 | 0.949 | 0.804 | 0.985 | 0.727 |
+
+The Qwen3 comparison warms query embeddings before timing. The latency fields in
+the JSON are useful for relative local CPU work, not provider benchmarking:
+cached embedding search itself is sub-millisecond in-process, while hybrid
+evaluation also runs BM25 candidate scoring.
+
+Style split for the strongest fixed-suite hybrid:
+
+| Query style | Region hit@1 | Region hit@10 | MRR |
+| --- | ---: | ---: | ---: |
+| Direct | 0.634 | 0.964 | 0.748 |
+| Concern | 0.679 | 0.964 | 0.778 |
+| Adversarial | 0.563 | 0.955 | 0.696 |
 
 ## Interpretation
 
 Refmark-enriched retrieval metadata produced the largest no-embedding gain:
-region hit@10 improved from 0.694 to 0.856 in the deduped comparison, and from
-0.773 to 0.902 in the full generated-question eval.
+region hit@10 improved from 0.691 to 0.821 in the fixed style-aware
+comparison, and from 0.773 to 0.902 in the earlier full generated-question
+eval.
 
 Real semantic embeddings helped article-level navigation substantially. For
 this corpus, embeddings alone were already strong at article hit@10, but the
 best region-level results came from combining Refmark-enriched metadata with
-Qwen3 embeddings.
+Qwen3 embeddings. The best fixed-suite hybrid reached 0.961 region hit@10 and
+0.985 article hit@10, including 0.955 region hit@10 on adversarial questions.
 
 Hashed embeddings were useful as a local sanity baseline, but they did not beat
 the enriched lexical index. They are not a substitute for semantic embeddings
@@ -157,7 +220,8 @@ python -m refmark.cli query-pipeline examples/portable_search_index/output/fasta
   row immediately.
 - Add first-class embedding configuration to `run-pipeline`, not only to the
   comparison script.
-- Preserve both 480-row and deduped-160 evaluation modes explicitly in reports.
+- Preserve both full-pipeline and exported-eval-JSONL comparison modes
+  explicitly in reports.
 - Add article-level and region-level metrics to the default pipeline summary.
 - Generalize the FastAPI heatmap shell into a reproducible renderer instead of
   treating the generated HTML as a hand-polished artifact.

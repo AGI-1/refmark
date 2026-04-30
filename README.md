@@ -88,6 +88,9 @@ flowchart LR
 - **Existing chunked RAG:** keep your current chunker and retriever, but attach
   stable ref ids so retrieved chunks become testable evidence with clearer
   churn control and anomaly checks.
+- **Production feedback loops:** aggregate real query/click/manual-selection
+  events into reviewable alias, confusion, query-magnet, no-answer, and
+  coverage-gap candidates.
 - **Portable documentation search:** turn a folder of docs into Refmark regions,
   enrich each region once with cheap LLM retrieval views, and ship a small
   local BM25 JSON index that needs no runtime model.
@@ -123,6 +126,8 @@ The stable package surface is intentionally small:
   evaluation.
 - `map`, `expand`, `pack-context`, `build-index`, `search-index`, and
   `eval-index` for corpus-to-eval workflows.
+- `feedback-diagnostics` and `analyze_feedback` for turning production search
+  events into adaptation review queues.
 - `highlight`, `parse_citation_refs`, and citation scoring helpers for
   reviewable model citations.
 - `Refmarker` for pass-through marking and shadow registries.
@@ -171,6 +176,14 @@ python -m refmark.cli map docs/policy.md -o .refmark/policy_manifest.jsonl --mar
 python -m refmark.cli expand .refmark/policy_manifest.jsonl --refs P03 --before 1 --after 1
 python -m refmark.cli pack-context .refmark/policy_manifest.jsonl --refs P03 --format text
 python -m refmark.cli align old_policy.docx new_policy.pdf --top-k 2 --coverage-html coverage_review.html
+```
+
+To turn production search events into targeted improvement candidates:
+
+```bash
+python -m refmark.cli feedback-diagnostics feedback.jsonl \
+  --manifest .refmark/policy_manifest.jsonl \
+  -o feedback_report.json
 ```
 
 Citation ranges and edit ranges intentionally differ. Citation ranges such as

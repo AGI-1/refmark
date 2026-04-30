@@ -371,6 +371,67 @@ def test_pipeline_cli_question_prompt_supports_overridable_template(tmp_path):
     assert "Beta evidence" in prompt.stdout
 
 
+def test_pipeline_cli_discovery_review_and_card(tmp_path):
+    source = tmp_path / "source.txt"
+    manifest = tmp_path / "manifest.jsonl"
+    discovery = tmp_path / "discovery.json"
+    review = tmp_path / "review.json"
+    question_plan = tmp_path / "question_plan.json"
+    source.write_text("Table of contents\nDefinitions\n\nSDS means safety data sheet.\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "map", str(source), "-o", str(manifest), "--min-words", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "discover", str(manifest), "-o", str(discovery), "--mode", "windowed", "--window-tokens", "8"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "review-discovery", str(discovery), "--manifest", str(manifest), "-o", str(review)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    card = subprocess.run(
+        [sys.executable, "-m", "refmark.cli", "discovery-card", str(manifest), str(discovery), "--ref", "source:P02"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "question-plan",
+            str(manifest),
+            str(discovery),
+            "-o",
+            str(question_plan),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    review_payload = json.loads(review.read_text(encoding="utf-8"))
+    card_payload = json.loads(card.stdout)
+    discovery_payload = json.loads(discovery.read_text(encoding="utf-8"))
+    plan_payload = json.loads(question_plan.read_text(encoding="utf-8"))
+    assert review_payload["schema"] == "refmark.discovery_review.v1"
+    assert discovery_payload["windows"]
+    assert discovery_payload["clusters"]
+    assert card_payload["schema"] == "refmark.discovery_context_card.v1"
+    assert card_payload["card"]["stable_ref"] == "source:P02"
+    assert plan_payload["schema"] == "refmark.question_plan.v1"
+    assert "direct" in plan_payload["summary"]["by_style"]
+
+
 def test_pipeline_cli_eval_index(tmp_path):
     source = tmp_path / "source.txt"
     index = tmp_path / "index.json"
@@ -442,6 +503,22 @@ def test_pipeline_cli_eval_index(tmp_path):
     assert payload["metrics"]["hit_at_k"] == 1.0
     assert payload["ci_status"]["status"] == "pass"
     assert payload["validation"] == {"missing": [], "ambiguous": []}
+
+    inspected = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "inspect-index",
+            str(index),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    smell_payload = json.loads(inspected.stdout)
+    assert smell_payload["schema"] == "refmark.index_data_smells.v1"
+    assert "weighted_smell_score" in smell_payload["diagnostics"]["summary"]
 
 
 def test_pipeline_cli_map_and_build_index_use_same_directory_doc_ids(tmp_path):

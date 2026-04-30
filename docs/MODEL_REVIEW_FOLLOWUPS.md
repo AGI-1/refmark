@@ -40,6 +40,69 @@ Raw responses are local scratch artifacts under `.refmark/model_reviews/`.
 | `enrich-prompt --answer-format claims` | Makes citation grammar easier for general chat workflows. | P2 |
 | Training: hard-negative or concern-alias reranker | Best near-term BGB experiment is targeted, heatmap-driven repair, not broad "tiny model replaces embeddings." | Experimental |
 
+## 2026-04-29 Heatmap/Adaptation Review Pass
+
+A compact follow-up prompt was sent to:
+
+- `qwen/qwen3.6-max-preview`
+- `moonshotai/kimi-k2.6`
+- `minimax/minimax-m2.7`
+- `z-ai/glm-5.1`
+- `xiaomi/mimo-v2.5-pro`
+
+The prompt focused on the current evidence-retrieval framework, not the whole
+codebase. Qwen returned the cleanest structured JSON; Minimax returned useful
+content but truncated before strict JSON closure; the other providers returned
+empty content through OpenRouter in this run. Useful repeated themes:
+
+| Theme | Action |
+| --- | --- |
+| Query-style averages can hide failures | Implemented query-layer heatmap controls in the FastAPI dashboard and core `EvalSuite` diagnostics: `by_query_style` and `query_style_gap`. |
+| Local adaptation can regress unrelated rows | Implemented a deterministic blast-radius mini-eval probe before accepting FastAPI shadow-metadata changes. |
+| Shadow metadata can overfit generated questions | Documented hold-out and curated/manual probe requirements; keep adaptive and non-adaptive modes visible side by side. |
+| Query magnets can dominate retrieval and adaptation | Keep query-magnet roles/exclusions visible in heatmaps; future work should add a magnet-domination metric. |
+| Reviewer model can misclassify retrieval failures as gold ambiguity | Keep embedding-teacher disagreement checks as a next implementation target. |
+| Alias provenance matters | Current shadow metadata carries provenance; future work should expose alias-level provenance and collision/leakage diagnostics in reports. |
+
+## 2026-04-29 Data-Smell Review Pass
+
+OpenRouter model availability was checked before the run. Relevant low-cost
+options available at the time included `deepseek/deepseek-v4-flash`,
+`deepseek/deepseek-v4-pro`, `x-ai/grok-4.1-fast`, and `x-ai/grok-4-fast`.
+A compact data-smell prompt was sent to:
+
+- `deepseek/deepseek-v4-flash`
+- `x-ai/grok-4.1-fast`
+- `qwen/qwen3.6-max-preview`
+
+Useful feedback:
+
+| Theme | Action |
+| --- | --- |
+| Data smells need severity, not only counts | Implemented a deterministic `weighted_smell_score` and severity bucket in `analyze_index_smells`. |
+| Exact duplicates and near duplicates are different | Implemented exact duplicate groups beside near-duplicate candidate pairs. |
+| Contradictions should start as candidates | Implemented cheap potential-conflict cue pairs; LLM confirmation remains optional future work. |
+| Staleness and shadow metadata overfit are separate smell classes | Keep stale-ref checks in `EvalSuite`/`eval-index`; keep blast-radius probing for adaptation overfit. |
+| Smells should be dashboard-visible | FastAPI heatmap overview now includes a data-smell block. |
+
+## 2026-04-30 Discovery/Question-Planning Review Pass
+
+A compact discovery-flow prompt was sent to:
+
+- `deepseek/deepseek-v4-flash`
+- `x-ai/grok-4.1-fast`
+- `qwen/qwen3.6-max-preview`
+
+Useful repeated themes:
+
+| Theme | Action |
+| --- | --- |
+| Do not cut model prompts through the middle of a region | Keep discovery windows region-safe; current whole-corpus packer already stops between records, but true windowed discovery is still future work. |
+| Discovery should feed generation through compact cards | Implemented `DiscoveryContextCard` and `refmark cli discovery-card`; full pipeline question generation now includes the card and hashes it into the question cache key. |
+| Local discovery noise needs review queues | Implemented deterministic `review_discovery` and `refmark cli review-discovery` for broad terms, singleton terms, excluded regions, heading-boundary issues, broad query families, and stale refs. |
+| Preserve provenance through normalization/clustering | Context cards and review issues keep stable refs/ranges instead of free-form summaries only. |
+| Heading detection can pollute roles | Tightened the short-line heading heuristic so one-line definitions ending in punctuation are not marked as headings. |
+
 ## Rejected Or Deferred
 
 | Suggestion | Decision |

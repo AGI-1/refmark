@@ -20,6 +20,7 @@ def test_run_full_pipeline_easy_mode_is_idempotent(tmp_path):
         json.dumps(
             {
                 "corpus_path": str(docs),
+                "discovery": {"mode": "windowed", "window_tokens": 10, "overlap_regions": 0},
                 "question_generation": {"enabled": False},
                 "retrieval_views": {"enabled": False},
                 "loop": {"sample_size": 2, "top_k": 5},
@@ -43,7 +44,32 @@ def test_run_full_pipeline_easy_mode_is_idempotent(tmp_path):
     assert first.stats["eval"]["hit_at_k"] == 1.0
     assert (output / "corpus.refmark.jsonl").exists()
     assert (output / "sections.json").exists()
+    assert (output / "discovery.json").exists()
+    assert (output / "discovery_review.json").exists()
+    assert (output / "question_plan.json").exists()
     assert (output / "docs.index.json").exists()
     assert (output / "docs.browser.json").exists()
+    assert first.stats["discovery"]["mode"] == "windowed"
+    assert first.stats["discovery"]["windows"] >= 1
+    assert first.stats["question_plan"]["by_style"] == {"adversarial": 2, "concern": 2, "direct": 2}
+    assert first.stats["eval"]["count"] == 6.0
+    assert set(first.stats["eval"]["by_query_style"]) == {"adversarial", "concern", "direct"}
     assert "Reused manifest" in "\n".join(second.notes)
+    assert "Reused discovery review" in "\n".join(second.notes)
+    assert "Reused question plan" in "\n".join(second.notes)
     assert "Reused eval questions" in "\n".join(second.notes)
+    cache_rows = [
+        json.loads(line)
+        for line in (cache / "questions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert cache_rows[0]["prompt_version"] == "refmark.question_generation.v1"
+    assert "context_card" in cache_rows[0]
+    assert "question_plan" in cache_rows[0]
+    assert cache_rows[0]["context_card"]["stable_ref"].startswith("security:")
+    eval_rows = [
+        json.loads(line)
+        for line in (output / "eval_questions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert {row["metadata"]["query_style"] for row in eval_rows} == {"direct", "concern", "adversarial"}

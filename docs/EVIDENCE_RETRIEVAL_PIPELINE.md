@@ -57,6 +57,16 @@ The next loop is documented in `docs/DISCOVERY_ADAPT_LOOP.md`:
 discover -> generate questions -> train/evaluate -> heatmap -> adapt -> regenerate/train
 ```
 
+That loop should become a set of explicit Refmark agents rather than an
+implicit "ask Codex to inspect this run" workflow. See
+`docs/REFMARK_AGENT_WORKFLOW.md` for the agent roles, artifacts, and review
+boundaries.
+
+For production systems, the same loop can start from real user search events.
+See `docs/PRODUCTION_FEEDBACK_LOOP.md` for the feedback JSONL schema and
+diagnostics that convert repeated clicks, no-answer signals, and manual
+selections into reviewable adaptation candidates.
+
 ## Corpus Shape
 
 Use a single structured domain first. The current retained local corpus for this
@@ -120,6 +130,30 @@ Core heatmap dimensions to expose:
 | Range quality | exact hit, parent hit, neighbor hit, range cover, overcite, undercite | Prevents top-k success from hiding citation-quality problems. |
 | Drift/staleness | stale examples, changed refs, deleted refs, hash mismatch | Turns corpus updates into incremental test maintenance. |
 | Provenance hygiene | source reports, split seed, train/eval membership, generation model, cache hash | Prevents adapted indexes from being evaluated against examples that influenced their metadata. |
+| Data smells | query magnets, duplicate/near-duplicate refs, oversized regions, sparse retrieval views, potential conflict cues | Separates corpus hygiene problems from retriever quality problems. |
+
+Query style should be a first-class heatmap layer, not just a hidden column in
+the eval JSON. A block that is green for direct questions but red for
+concern-style or adversarial wording is not "bad documentation"; it is a
+semantic access problem. The dashboard should keep at least these slices
+visible:
+
+- all query types, for the product-level headline score;
+- direct questions, for lexical/title/section-name coverage;
+- concern or motivation questions, for user-intent coverage;
+- adversarial or distant paraphrases, when generated, for robustness checks;
+- curated/manual probes, kept separate from generated/adapted rows.
+
+Useful interpretations:
+
+| Layer pattern | Likely cause | Next action |
+| --- | --- | --- |
+| Direct green, concern red | Users ask in problem language absent from the doc text | Add Doc2Query shadow metadata or concern questions. |
+| Direct and concern green, adversarial red | The section is findable but not robust to distant paraphrase | Keep as hard eval, consider embedding/reranker support. |
+| All green, one layer gray | The block has no questions in that style | Generate coverage rows before treating it as solved. |
+| Embedding teacher green, BM25 red | Lexical/search-view gap | Distill teacher-visible phrases into shadow aliases. |
+| Adaptive mode green, baseline red | Adaptation helped | Keep provenance and check held-out rows. |
+| Adaptive mode red, baseline green | Over-adaptation or metadata noise | Reject or gate the metadata change. |
 
 The generic `eval-index` CLI now emits the first portable subset of this shape:
 
@@ -136,6 +170,9 @@ The generic `eval-index` CLI now emits the first portable subset of this shape:
 - CI gates through `--min-hit-at-k`, `--min-hit-at-1`, `--min-mrr`,
   `--min-gold-coverage`, `--max-stale`, and `--fail-on-regression`;
 - hard-ref and confusion heatmaps;
+- query-style summaries and gap metrics in `diagnostics.by_query_style` and
+  `diagnostics.query_style_gap`, so direct questions cannot hide concern-style
+  or adversarial failures;
 - per-target-shape summaries in `diagnostics.by_gold_mode` for single-region,
   contiguous-range, and distributed-ref examples;
 - score-margin selective-jump diagnostics;
@@ -191,6 +228,7 @@ weak area
   -> reviewer proposes question/metadata/range adaptations
   -> build candidate changes in memory
   -> run mini-eval only for rows whose stable refs are affected
+  -> run a deterministic blast-radius probe over unaffected rows
   -> accept if hit@k, hit@1, MRR, and coverage do not regress
   -> write accepted question edits and shadow metadata
   -> refresh the full report/heatmap as final verification
@@ -198,8 +236,11 @@ weak area
 
 The mini-eval is intentionally cheap. A typical section has only a couple of
 questions, so validating a candidate rewrite usually means a handful of local
-retrieval calls. Full-suite reruns remain useful as the final guardrail because
-adaptive embedding caches and cross-section metadata can have global effects.
+retrieval calls. The blast-radius probe is a cheap neighbor/global check for
+shadow metadata leakage: if a local alias helps the target but hurts unrelated
+rows, the candidate is rejected before it becomes durable metadata. Full-suite
+reruns remain useful as the final guardrail because adaptive embedding caches
+and cross-section metadata can have global effects.
 
 The FastAPI heatmap experiment writes this richer plan to
 `question_improvement_agent_report.json`. The plan distinguishes validation
@@ -212,6 +253,47 @@ disambiguators, roles, and confusion edges to refs/ranges while preserving the
 original document text. Retrieval modes may consume this metadata by default,
 while reports should keep explicit non-adaptive baselines so improvements or
 regressions remain visible.
+
+Reviewer payloads should include enough context to diagnose whether a weak
+block is a bad question, weak retrieval signal, noisy shadow metadata, or a
+corpus smell. The current FastAPI loop sends the gold evidence, top competing
+evidence, observed top refs per retrieval mode, current shadow aliases for both
+gold and competing refs, and deterministic smell candidates touching those refs.
+That lets the reviewer explicitly emit `record_data_smell` for duplicate,
+contradictory, stale, or metadata-noisy cases instead of forcing every failure
+into a retriever-tuning bucket.
+
+Guardrails learned from the BGB and FastAPI loops:
+
+- Do not let a reviewer model be the only judge of its own generated rows.
+  Cross-check a sample against an embedding teacher or a second model,
+  especially when the reviewer labels a miss as ambiguous.
+- Keep an adaptation hold-out. Improvements on the exact rows used to generate
+  metadata are useful for debugging but not enough for a product claim.
+- Compare local and global impact. A Doc2Query alias can help one weak block
+  while making a neighboring block noisier.
+- Track query style separately. A direct-question win should not hide a
+  concern-question regression.
+- Preserve a regression watchlist for sections that historically degrade when
+  metadata changes elsewhere.
+
+Data-smell diagnostics should stay explicit and conservative. A duplicate
+candidate is not automatically wrong, and a potential conflict cue is not a
+verified contradiction. They are review targets that explain why retrieval may
+be unstable:
+
+```text
+query magnet        broad ledger/changelog/hub content attracts many queries
+duplicate candidate adjacent or repeated regions compete for the same intent
+oversized region    one ref is too broad for clean rank-1 localization
+sparse view         generated metadata is missing or too thin
+potential conflict  regions share topic terms but use opposing obligation cues
+```
+
+The portable index now carries deterministic smell diagnostics, and the
+FastAPI heatmap overview displays a compact smell score beside retrieval
+metrics. LLM-assisted contradiction review can sit on top of these candidates,
+but the CI-safe baseline should remain deterministic.
 
 Example CI command:
 

@@ -10,6 +10,9 @@ def test_write_and_load_full_pipeline_config_template(tmp_path):
     config = load_full_pipeline_config(path)
 
     assert config.schema == "refmark.full_pipeline_config.v1"
+    assert config.discovery.mode == "whole"
+    assert config.discovery.review_enabled is True
+    assert config.question_plan.concern_per_region == 1
     assert config.question_generation.provider == "openrouter"
     assert config.retrieval_views.model == "mistralai/mistral-nemo"
     assert config.embeddings[0].name == "qwen3-embedding-8b"
@@ -24,6 +27,8 @@ def test_load_full_pipeline_config_overrides_nested_values(tmp_path):
             {
                 "corpus_path": "docs/api",
                 "include_embeddings": True,
+                "discovery": {"mode": "windowed", "window_tokens": 40000, "overlap_regions": 2},
+                "question_plan": {"direct_per_region": 2, "adversarial_per_region": 0},
                 "question_generation": {"model": "qwen/qwen-turbo", "concurrency": 12},
                 "judge": {"enabled": True, "model": "moonshotai/kimi-k2.6"},
                 "embeddings": [
@@ -44,6 +49,11 @@ def test_load_full_pipeline_config_overrides_nested_values(tmp_path):
 
     assert config.corpus_path == "docs/api"
     assert config.include_embeddings is True
+    assert config.discovery.mode == "windowed"
+    assert config.discovery.window_tokens == 40000
+    assert config.discovery.overlap_regions == 2
+    assert config.question_plan.direct_per_region == 2
+    assert config.question_plan.adversarial_per_region == 0
     assert config.question_generation.concurrency == 12
     assert config.judge.enabled is True
     assert config.judge.model == "moonshotai/kimi-k2.6"

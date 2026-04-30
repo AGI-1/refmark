@@ -11,6 +11,10 @@ The point of the heatmap is to make corpus and training failures actionable at
 the ref/range level. A weak area should point to one or more concrete
 adaptations, not just a lower aggregate score.
 
+This document describes the mechanics. The intended product shape is a set of
+Refmark agents that run these steps, preserve artifacts, and ask for review at
+the right boundaries. See `docs/REFMARK_AGENT_WORKFLOW.md`.
+
 ## Discovery Stage
 
 Discovery prepares the context that question generation and training need before
@@ -84,21 +88,98 @@ Planned shape:
 
 ```text
 1. Map corpus into refs.
-2. Split into overlapping section windows.
+2. Split into region-safe overlapping section windows.
 3. Discover each window with:
    - local refs;
    - prior/global summary;
    - glossary so far;
    - known exclusions;
    - unresolved conflicts.
-4. Merge window discoveries.
-5. Reconcile summaries only.
-6. Revisit weak/conflicting windows after heatmap evaluation.
+4. Merge window discoveries while preserving every source ref.
+5. Normalize terms/clusters globally.
+6. Produce a discovery review queue for noisy roles, broad terms, query magnets,
+   large ranges, stale refs, and heading-boundary failures.
+7. Revisit weak/conflicting windows after heatmap evaluation.
 ```
 
 The critical rule: summaries must remain structured and cited. Do not rely on a
 free-form "summary so far" alone. Every discovered term, exclusion, range
 candidate, and query family should carry refs/ranges.
+
+Model-review notes from the current design pass converged on three guardrails:
+
+- never cut a model prompt through the middle of a refmarked region;
+- keep canonical clusters as metadata over refs, not replacement prose;
+- route low-confidence discoveries to review instead of letting noisy terms
+  silently steer question generation.
+
+Current implementation now exposes deterministic review primitives:
+
+```bash
+python -m refmark.cli review-discovery corpus.discovery.json \
+  --manifest corpus.refmark.jsonl \
+  -o corpus.discovery_review.json
+```
+
+The review output is a HiL/LLM-judge queue. It does not mutate discovery by
+itself. Typical issue kinds are `broad_term`, `singleton_term`,
+`excluded_region`, `heading_detection`, `large_range_candidate`,
+`broad_query_family`, `stale_or_unknown_ref`, `broad_cluster`,
+`unclustered_regions`, `empty_window`, and `oversized_source_region`.
+
+Windowed discovery is now available:
+
+```bash
+python -m refmark.cli discover corpus.refmark.jsonl \
+  -o corpus.discovery.json \
+  --mode windowed \
+  --window-tokens 40000 \
+  --overlap-regions 2
+```
+
+Windowing is region-safe: a region is either included whole in a window or moved
+to the next one. Per-window discoveries are merged conservatively by stable ref.
+The merged manifest includes:
+
+- `windows`: token counts, refs, and doc ids per window;
+- merged terms, abbreviations, roles, ranges, and query families;
+- deterministic `clusters` seeded from document ids and discovery terms.
+
+The first cluster layer is intentionally simple. It is a navigation/review seed,
+not a final ontology. Later LLM normalization can rename, split, and merge
+clusters while preserving the same ref lists.
+
+## Discovery Context Cards
+
+Question generation should not receive the entire discovery manifest. It should
+receive a compact context card for the target ref/range:
+
+```json
+{
+  "stable_ref": "docs:P42",
+  "corpus_summary": "...",
+  "region_summary": "...",
+  "roles": ["definition"],
+  "terms": ["exposure", "controls"],
+  "abbreviations": ["SDS"],
+  "query_families": ["questions about exposure"],
+  "range_candidates": [["docs:P42", "docs:P43"]],
+  "neighboring_refs": ["docs:P41", "docs:P43"],
+  "parent_ref": "docs:P40",
+  "generation_guidance": ["include at least one definition-style query"]
+}
+```
+
+CLI:
+
+```bash
+python -m refmark.cli discovery-card corpus.refmark.jsonl corpus.discovery.json \
+  --ref docs:P42
+```
+
+The full pipeline now stores this context card in the question cache and includes
+it in remote question-generation prompts. The cache key includes a hash of the
+card, so question rows are regenerated when discovery changes.
 
 ## Question Generation
 
@@ -113,10 +194,38 @@ Question generation should consume:
 - known hard negatives/magnet refs from prior heatmaps;
 - generation mode: `single`, `range`, `distributed`, or `parent`.
 
+Before generation, the pipeline writes an explicit question plan:
+
+```bash
+python -m refmark.cli question-plan corpus.refmark.jsonl corpus.discovery.json \
+  -o corpus.question_plan.json
+```
+
+Default styles:
+
+- `direct`: normal lookup wording with source terminology;
+- `concern`: user problem/goal/symptom wording;
+- `adversarial`: valid paraphrase with lower lexical overlap.
+
+The plan is a reviewable artifact, not a hidden prompt detail. Generated rows
+carry `metadata.query_style`, and eval diagnostics summarize metrics by style.
+That is important because a green direct-query heatmap can still hide weak
+concern/adversarial retrieval.
+
 Current local question generation can use discovery terms, but it is too
 lexical. It is useful for smoke tests and fast heatmaps, not for public quality
 claims. For serious evaluation, use cached LLM-generated questions and keep the
 prompt version, model, provider, target refs, and source hashes in the cache key.
+
+Current implementation state:
+
+- local generation uses context-card terms, roles, and query families to vary
+  templates;
+- remote generation receives the compact context card plus the target region
+  text;
+- generated eval rows keep source hashes and prompt/discovery metadata;
+- the next major step is windowed LLM discovery with global normalization and
+  reviewed cluster naming.
 
 ## Motivation Understanding
 

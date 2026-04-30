@@ -2,6 +2,7 @@ from pathlib import Path
 
 from refmark.search_index import (
     RetrievalView,
+    analyze_index_smells,
     build_search_index,
     export_browser_search_index,
     generate_views,
@@ -108,6 +109,34 @@ def test_query_magnet_regions_are_visible_but_excluded_from_default_search(tmp_p
 
     included_hits = index.search("audit logs documentation changes", top_k=5, include_excluded=True)
     assert any(hit.doc_id == "release_notes" and hit.search_excluded for hit in included_hits)
+
+
+def test_analyze_index_smells_reports_magnets_duplicates_and_sparse_views(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    duplicated = "Token rotation is required every 90 days for production credentials.\n"
+    (docs / "security.md").write_text(
+        duplicated + "\n" + duplicated + "\n" + "Short sparse region about audit log retention.\n",
+        encoding="utf-8",
+    )
+    (docs / "release_notes.md").write_text(
+        "Version 1.2 released contributors translation documentation changes for token rotation.\n",
+        encoding="utf-8",
+    )
+    index_path = tmp_path / "index.json"
+
+    build_search_index(docs, index_path, source="local", min_words=3, questions_per_region=0, keywords_per_region=0)
+    index = load_search_index(index_path)
+    smells = analyze_index_smells(index, duplicate_threshold=0.8)
+
+    assert smells["summary"]["query_magnets"] == 1
+    assert smells["summary"]["duplicate_candidates"] >= 1
+    assert smells["summary"]["exact_duplicate_groups"] >= 1
+    assert smells["summary"]["severity"] in {"low", "medium", "high"}
+    assert smells["summary"]["sparse_retrieval_views"] == len(index.regions)
+    assert smells["query_magnets"][0]["stable_ref"].startswith("release_notes:")
+    assert smells["exact_duplicate_groups"][0]["refs"][0].startswith("security:")
+    assert smells["duplicate_candidates"][0]["left_ref"].startswith("security:")
 
 
 def test_export_browser_search_index_contains_bm25_payload(tmp_path: Path):

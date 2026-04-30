@@ -409,6 +409,9 @@ def build_search_index(
                 4,
             ),
         },
+        "diagnostics": {
+            "data_smells": analyze_index_smells(PortableBM25Index(regions, include_source=include_source)),
+        },
         "regions": [region.to_dict() for region in regions],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -495,6 +498,62 @@ def load_search_index(path: str | Path) -> PortableBM25Index:
     return PortableBM25Index(regions, include_source=include_source)
 
 
+def analyze_index_smells(
+    index: PortableBM25Index,
+    *,
+    duplicate_threshold: float = 0.86,
+    max_pairs: int = 25,
+) -> dict[str, object]:
+    """Return deterministic corpus/data-smell diagnostics for a search index.
+
+    These are not proof of a defect. They are cheap visibility signals for the
+    same heatmap/adapt loop: query magnets, near-duplicates, broad chunks,
+    sparse retrieval metadata, and possible conflict wording.
+    """
+
+    regions = index.regions
+    lengths = [len(tokenize(region.text)) for region in regions]
+    median_length = _median(lengths)
+    oversized_cutoff = max(900, median_length * 3.5 if median_length else 900)
+    query_magnets = [
+        _smell_region(region, kind="query_magnet", reason=_query_magnet_reason(region))
+        for region in regions
+        if _is_query_magnet_region(region)
+    ]
+    oversized = [
+        _smell_region(region, kind="oversized_region", reason=f"{len(tokenize(region.text))} tokens exceeds cutoff {int(oversized_cutoff)}")
+        for region in regions
+        if len(tokenize(region.text)) > oversized_cutoff
+    ]
+    sparse_metadata = [
+        _smell_region(region, kind="sparse_retrieval_view", reason="retrieval view has no generated questions or keywords")
+        for region in regions
+        if not region.view.questions and not region.view.keywords
+    ]
+    duplicate_pairs = _duplicate_region_pairs(regions, threshold=duplicate_threshold, limit=max_pairs)
+    exact_duplicates = _exact_duplicate_groups(regions)
+    conflict_pairs = _potential_conflict_pairs(regions, limit=max_pairs)
+    summary = {
+        "query_magnets": len(query_magnets),
+        "oversized_regions": len(oversized),
+        "sparse_retrieval_views": len(sparse_metadata),
+        "exact_duplicate_groups": len(exact_duplicates),
+        "duplicate_candidates": len(duplicate_pairs),
+        "potential_conflicts": len(conflict_pairs),
+    }
+    summary["weighted_smell_score"] = _weighted_smell_score(summary, region_count=len(regions))
+    summary["severity"] = _smell_severity(float(summary["weighted_smell_score"]))
+    return {
+        "summary": summary,
+        "query_magnets": query_magnets[:25],
+        "oversized_regions": sorted(oversized, key=lambda row: (-int(row["tokens"]), row["stable_ref"]))[:25],
+        "sparse_retrieval_views": sparse_metadata[:25],
+        "exact_duplicate_groups": exact_duplicates[:25],
+        "duplicate_candidates": duplicate_pairs,
+        "potential_conflicts": conflict_pairs,
+    }
+
+
 def _browser_region_payload(region: SearchRegion, *, include_text: bool, max_text_chars: int) -> dict[str, object]:
     payload = {
         "doc_id": region.doc_id,
@@ -515,6 +574,211 @@ def _browser_region_payload(region: SearchRegion, *, include_text: bool, max_tex
             text = text[: max_text_chars - 3].rstrip() + "..."
         payload["text"] = text
     return payload
+
+
+def _smell_region(region: SearchRegion, *, kind: str, reason: str) -> dict[str, object]:
+    return {
+        "kind": kind,
+        "stable_ref": region.stable_ref,
+        "doc_id": region.doc_id,
+        "source_path": region.source_path,
+        "tokens": len(tokenize(region.text)),
+        "roles": region.roles,
+        "reason": reason,
+        "snippet": " ".join(region.text.split())[:220],
+    }
+
+
+def _is_query_magnet_region(region: SearchRegion) -> bool:
+    if region.search_excluded or "query_magnet" in region.roles:
+        return True
+    haystack = " ".join(
+        part
+        for part in (region.doc_id, region.source_path or "", region.view.summary, region.text[:240])
+        if part
+    ).lower()
+    return _looks_like_query_magnet(haystack)
+
+
+def _query_magnet_reason(region: SearchRegion) -> str:
+    if region.search_exclusion_reason:
+        return region.search_exclusion_reason
+    if region.search_excluded or "query_magnet" in region.roles:
+        return "region is excluded from default search"
+    return "detected changelog/release-note style query magnet"
+
+
+def _duplicate_region_pairs(regions: list[SearchRegion], *, threshold: float, limit: int) -> list[dict[str, object]]:
+    token_sets = [_content_token_set(region) for region in regions]
+    pairs: list[dict[str, object]] = []
+    for left_index, left_terms in enumerate(token_sets):
+        if len(left_terms) < 6:
+            continue
+        for right_index in range(left_index + 1, len(regions)):
+            right_terms = token_sets[right_index]
+            if len(right_terms) < 6:
+                continue
+            overlap = len(left_terms & right_terms)
+            score = overlap / max(len(left_terms | right_terms), 1)
+            containment = overlap / max(min(len(left_terms), len(right_terms)), 1)
+            if score >= threshold or containment >= 0.94:
+                pairs.append(
+                    {
+                        "left_ref": regions[left_index].stable_ref,
+                        "right_ref": regions[right_index].stable_ref,
+                        "jaccard": round(score, 4),
+                        "containment": round(containment, 4),
+                        "shared_terms": sorted(left_terms & right_terms)[:18],
+                    }
+                )
+    pairs.sort(key=lambda row: (-float(row["jaccard"]), -float(row["containment"]), str(row["left_ref"])))
+    return pairs[:limit]
+
+
+def _exact_duplicate_groups(regions: list[SearchRegion]) -> list[dict[str, object]]:
+    grouped: dict[str, list[SearchRegion]] = defaultdict(list)
+    for region in regions:
+        normalized = " ".join(tokenize(region.text))
+        if len(normalized) >= 40:
+            grouped[hashlib.sha256(normalized.encode("utf-8")).hexdigest()].append(region)
+    groups = []
+    for rows in grouped.values():
+        if len(rows) < 2:
+            continue
+        groups.append(
+            {
+                "refs": [region.stable_ref for region in rows],
+                "doc_ids": sorted({region.doc_id for region in rows}),
+                "tokens": len(tokenize(rows[0].text)),
+                "snippet": " ".join(rows[0].text.split())[:220],
+            }
+        )
+    groups.sort(key=lambda row: (-len(row["refs"]), str(row["refs"][0])))
+    return groups
+
+
+def _potential_conflict_pairs(regions: list[SearchRegion], *, limit: int) -> list[dict[str, object]]:
+    groups: dict[tuple[str, ...], list[tuple[SearchRegion, set[str], set[str]]]] = defaultdict(list)
+    for region in regions:
+        terms = _content_token_set(region)
+        topic = tuple(sorted(term for term in terms if len(term) >= 5)[:8])
+        cues = _conflict_cues(region.text)
+        if topic and cues:
+            groups[topic].append((region, cues, terms))
+    pairs: list[dict[str, object]] = []
+    for _topic, items in groups.items():
+        for left_index, (left_region, left_cues, left_terms) in enumerate(items):
+            for right_region, right_cues, right_terms in items[left_index + 1 :]:
+                if not _opposing_cues(left_cues, right_cues):
+                    continue
+                shared = sorted(left_terms & right_terms)
+                if len(shared) < 5:
+                    continue
+                pairs.append(
+                    {
+                        "left_ref": left_region.stable_ref,
+                        "right_ref": right_region.stable_ref,
+                        "left_cues": sorted(left_cues),
+                        "right_cues": sorted(right_cues),
+                        "shared_terms": shared[:18],
+                        "reason": "regions share topic terms but contain opposing obligation/permission cues",
+                    }
+                )
+    pairs.sort(key=lambda row: (str(row["left_ref"]), str(row["right_ref"])))
+    return pairs[:limit]
+
+
+def _content_token_set(region: SearchRegion) -> set[str]:
+    return {
+        token
+        for token in tokenize(" ".join([region.text, region.view.summary, *region.view.keywords]))
+        if len(token) >= 4 and token not in _SMELL_STOPWORDS
+    }
+
+
+def _conflict_cues(text: str) -> set[str]:
+    lowered = text.lower()
+    cues: set[str] = set()
+    patterns = {
+        "must": ("must", "required", "shall", "mandatory"),
+        "may": ("may", "optional", "can ", "allowed", "permitted"),
+        "must_not": ("must not", "shall not", "prohibited", "forbidden", "not allowed", "cannot"),
+        "deprecated": ("deprecated", "removed", "no longer", "legacy"),
+        "recommended": ("recommended", "preferred", "best practice"),
+    }
+    for cue, terms in patterns.items():
+        if any(term in lowered for term in terms):
+            cues.add(cue)
+    return cues
+
+
+def _opposing_cues(left: set[str], right: set[str]) -> bool:
+    opposing = ({"must"}, {"may"}), ({"must", "may", "recommended"}, {"must_not", "deprecated"})
+    return any((left & a and right & b) or (left & b and right & a) for a, b in opposing)
+
+
+def _median(values: list[int]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _weighted_smell_score(summary: dict[str, object], *, region_count: int) -> float:
+    if region_count <= 0:
+        return 0.0
+    weights = {
+        "query_magnets": 0.25,
+        "oversized_regions": 0.18,
+        "sparse_retrieval_views": 0.10,
+        "exact_duplicate_groups": 0.25,
+        "duplicate_candidates": 0.18,
+        "potential_conflicts": 0.30,
+    }
+    score = 0.0
+    for key, weight in weights.items():
+        score += min(float(summary.get(key, 0)) / region_count, 1.0) * weight
+    return round(min(score, 1.0), 4)
+
+
+def _smell_severity(score: float) -> str:
+    if score >= 0.35:
+        return "high"
+    if score >= 0.12:
+        return "medium"
+    if score > 0:
+        return "low"
+    return "clean"
+
+
+_SMELL_STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "because",
+    "before",
+    "default",
+    "documentation",
+    "fastapi",
+    "from",
+    "have",
+    "into",
+    "more",
+    "other",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "using",
+    "when",
+    "where",
+    "which",
+    "with",
+}
 
 
 def classify_region_roles(record: RegionRecord) -> list[str]:
@@ -541,6 +805,10 @@ def _is_query_magnet_record(record: RegionRecord) -> bool:
         for part in (record.doc_id, record.source_path or "", record.text[:240])
         if part
     ).lower()
+    return _looks_like_query_magnet(haystack)
+
+
+def _looks_like_query_magnet(haystack: str) -> bool:
     markers = (
         "release_notes",
         "release-notes",

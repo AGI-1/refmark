@@ -4,14 +4,45 @@ This note defines the narrow release shape that is supportable by the current ev
 
 ## Stable Scope To Publish Now
 
-1. Deterministic locate-only citation evaluation with public data-smell metrics
-2. Highlighted source review for cited anchor regions
-3. Stable same-file multi-region edits for Python and TypeScript via `apply_ref_diff`
-4. Corpus-local anchored QA dataset generation and training prototype through `refmark_train`
+1. Corpus CI for retrieval: `query -> gold refs/ranges`, retriever comparison,
+   stale examples, provenance checks, and adaptation diagnostics
+2. Deterministic locate-only citation evaluation with public data-smell metrics
+3. Highlighted source review for cited anchor regions
+4. Portable local documentation search indexes as an evidence-eval demo/product
+   wedge
+5. Stable same-file multi-region edits for Python and TypeScript via
+   `apply_ref_diff`
+6. Corpus-local anchored QA dataset generation and training prototype through
+   `refmark_train`, framed as exploratory
 
 ## Supported User Journeys
 
-### 1. Exact Citations With Bigger Models
+### 1. Corpus CI For Retrieval
+
+Supported today as the strongest public workflow:
+
+- map a corpus into stable refs/ranges
+- create or import `query -> gold_refs` examples
+- compare arbitrary retrievers through `EvalSuite` or `eval-index`
+- validate stale refs after corpus changes
+- inspect hard refs, confusions, query-style gaps, and adaptation candidates
+- optionally aggregate production feedback through `feedback-diagnostics`
+
+Primary files:
+
+- [EVIDENCE_RETRIEVAL_PIPELINE.md](EVIDENCE_RETRIEVAL_PIPELINE.md)
+- [PRODUCTION_FEEDBACK_LOOP.md](PRODUCTION_FEEDBACK_LOOP.md)
+- `refmark/rag_eval.py`
+- `refmark/feedback.py`
+
+Public verification command:
+
+```bash
+python examples/docs_navigation_pipeline/run.py
+python -m refmark.cli eval-index examples/docs_navigation_pipeline/output/docs.index.json examples/docs_navigation_pipeline/eval_questions.jsonl --manifest examples/docs_navigation_pipeline/output/corpus.refmark.jsonl
+```
+
+### 2. Exact Citations With Bigger Models
 
 Supported today as a research-backed workflow:
 
@@ -39,7 +70,7 @@ Additional evidence that would strengthen this claim:
 - a denser exact-minimal benchmark (`golden_exact_v1`)
 - transfer to one external QA benchmark with pre-mapped anchors
 
-### 2. Syntax Highlighting For Cited Regions
+### 3. Syntax Highlighting For Cited Regions
 
 Supported today as a practical audit workflow:
 
@@ -59,7 +90,7 @@ Additional evidence that would help:
 - screenshots or tiny examples in docs
 - one notebook or HTML example for QA review
 
-### 3. Pipeline For Anchored QA Bench Creation From Corpus
+### 4. Pipeline For Anchored QA Bench Creation From Corpus
 
 Supported today, but should be presented as a prototype pipeline rather than a finalized product:
 

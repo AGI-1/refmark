@@ -52,6 +52,40 @@ Embeddings are listed separately because a run may evaluate several models or
 leave them disabled entirely. The no-infra runtime path remains valid when
 `include_embeddings: false`.
 
+Discovery is configured separately from model tiers because it defines the
+planning surface for question generation and review. Small corpora can use one
+whole-corpus pass. Larger corpora should use region-safe windows so model
+context limits never split a refmark region:
+
+```yaml
+discovery:
+  mode: windowed
+  source: local
+  window_tokens: 40000
+  overlap_regions: 2
+  review_enabled: true
+```
+
+The runner writes both `discovery.json` and `discovery_review.json`. The review
+artifact is deterministic today: it flags noisy broad terms, oversized regions,
+empty windows, broad clusters, unclustered refs, and stale range candidates
+before those issues can quietly shape generated questions.
+
+Question planning is also an explicit artifact. By default each selected region
+gets one `direct`, one `concern`, and one `adversarial` query request:
+
+```yaml
+question_plan:
+  direct_per_region: 1
+  concern_per_region: 1
+  adversarial_per_region: 1
+  include_excluded: false
+```
+
+The runner writes `question_plan.json` before calling any generator. Generated
+eval rows preserve `metadata.query_style`, so reports and heatmaps can separate
+easy lexical lookup from user-concern wording and lower-overlap paraphrases.
+
 Important idempotency rules:
 
 - generated views, questions, judgements, and embeddings must be cached by
@@ -73,6 +107,7 @@ The intended full loop is:
 corpus
 -> shadow manifest + section map
 -> discovery
+-> explicit question plan
 -> question/retrieval-view generation
 -> candidate indexes/retrievers
 -> eval reports + heatmap

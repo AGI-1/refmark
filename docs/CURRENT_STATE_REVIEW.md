@@ -48,6 +48,7 @@ Model guesses become measurable.
 | `discover` | early | Builds corpus discovery manifests; local mode is deterministic, model-backed discovery is experimental. |
 | `build-index` / `search-index` | usable example/product wedge | Builds local BM25 JSON indexes over source plus generated retrieval views. |
 | `eval-index` | important product surface | Self-checking eval reports with provenance hashes, stale refs, heatmap/confusion diagnostics, confidence gates, and adaptation recommendations. |
+| `feedback-diagnostics` / `analyze_feedback` | new, small, publishable primitive | Aggregates production query/click/manual-selection events into reviewable alias, confusion, query-magnet, no-answer, and missing-ref candidates. |
 | `CorpusMap` / `EvalSuite` / `EvalRun` | stable enough | Python API for `query -> gold refs/ranges` evaluation and retriever comparison. |
 | `provenance.py` | stable enough | Hashes index/examples/settings so eval artifacts can self-check. |
 
@@ -177,15 +178,20 @@ evidence, not vibes.
    "model guesses become measurable".
 2. Keep `eval-index` and `EvalSuite` as the product center.
 3. Promote the adapt-loop docs: heatmap -> adapt -> re-evaluate.
-4. For training, test surface-conditioned reformulation:
+4. Make feedback batches a first-class product journey:
+   - log query events and selected/clicked refs;
+   - run `feedback-diagnostics`;
+   - send candidates to the adaptation reviewer;
+   - promote only after held-out/blast-radius checks.
+5. For training, test surface-conditioned reformulation:
    - pick or train a coarse article/section router;
    - restrict expansion vocabulary to that surface;
    - evaluate append, fusion, and reranker-feature modes.
-5. Optimize oracle-label generation before scaling:
+6. Optimize oracle-label generation before scaling:
    - cache `query + term -> rank`;
    - parallelize across queries/articles;
    - only run full oracle evaluation at checkpoints.
-6. Keep generated outputs ignored unless a small report is intentionally
+7. Keep generated outputs ignored unless a small report is intentionally
    published.
 
 ## Verification Snapshot

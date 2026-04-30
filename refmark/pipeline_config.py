@@ -87,6 +87,34 @@ class PipelineBudgetConfig:
 
 
 @dataclass(frozen=True)
+class DiscoveryConfig:
+    source: str = "local"
+    model: str = "local"
+    endpoint: str = OPENROUTER_CHAT_URL
+    api_key_env: str = "OPENROUTER_API_KEY"
+    mode: str = "whole"
+    max_input_tokens: int = 180_000
+    window_tokens: int | None = None
+    overlap_regions: int = 1
+    review_enabled: bool = True
+    max_review_issues: int = 50
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class QuestionPlanConfig:
+    direct_per_region: int = 1
+    concern_per_region: int = 1
+    adversarial_per_region: int = 1
+    include_excluded: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class FullPipelineConfig:
     schema: str = "refmark.full_pipeline_config.v1"
     corpus_path: str = "docs"
@@ -95,6 +123,8 @@ class FullPipelineConfig:
     marker_format: str = "typed_bracket"
     min_words: int = 8
     include_embeddings: bool = False
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    question_plan: QuestionPlanConfig = field(default_factory=QuestionPlanConfig)
     question_generation: ModelTierConfig = field(default_factory=ModelTierConfig)
     retrieval_views: ModelTierConfig = field(
         default_factory=lambda: ModelTierConfig(
@@ -120,6 +150,8 @@ class FullPipelineConfig:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["discovery"] = self.discovery.to_dict()
+        payload["question_plan"] = self.question_plan.to_dict()
         payload["question_generation"] = self.question_generation.to_dict()
         payload["retrieval_views"] = self.retrieval_views.to_dict()
         payload["judge"] = self.judge.to_dict()
@@ -182,6 +214,8 @@ def full_pipeline_config_from_dict(payload: dict[str, Any]) -> FullPipelineConfi
         marker_format=str(merged.get("marker_format", "typed_bracket")),
         min_words=int(merged.get("min_words", 8)),
         include_embeddings=bool(merged.get("include_embeddings", False)),
+        discovery=DiscoveryConfig(**merged.get("discovery", {})),
+        question_plan=QuestionPlanConfig(**merged.get("question_plan", {})),
         question_generation=ModelTierConfig(**_model_payload(merged.get("question_generation", {}))),
         retrieval_views=ModelTierConfig(**_model_payload(merged.get("retrieval_views", {}))),
         judge=ModelTierConfig(**_model_payload(merged.get("judge", {}))),
@@ -303,6 +337,24 @@ marker_format: typed_bracket
 min_words: 8
 include_embeddings: false
 
+discovery:
+  source: local
+  model: local
+  endpoint: {endpoint}
+  api_key_env: OPENROUTER_API_KEY
+  mode: whole
+  max_input_tokens: 180000
+  window_tokens: null
+  overlap_regions: 1
+  review_enabled: true
+  max_review_issues: 50
+
+question_plan:
+  direct_per_region: 1
+  concern_per_region: 1
+  adversarial_per_region: 1
+  include_excluded: false
+
 question_generation:
   provider: openrouter
   model: qwen/qwen-turbo
@@ -387,4 +439,3 @@ budget:
   max_estimated_usd: null
   count_tokens: true
 """.format(schema=payload["schema"], corpus_path=payload["corpus_path"], endpoint=OPENROUTER_CHAT_URL)
-
