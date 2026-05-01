@@ -166,6 +166,8 @@ def _write_discovery_if_needed(config: FullPipelineConfig, records, path: Path, 
             max_input_tokens=config.discovery.max_input_tokens,
             window_tokens=config.discovery.window_tokens,
             overlap_regions=config.discovery.overlap_regions,
+            cluster_strategy=config.discovery.cluster_strategy,
+            target_clusters=config.discovery.target_clusters,
         )
         write_discovery(discovery, path)
     review_issues = _write_discovery_review_if_needed(config, discovery, records, review_path, notes)

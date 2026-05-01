@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -403,6 +404,19 @@ class EvalRun:
     def write_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
+    @property
+    def fingerprint(self) -> str:
+        """Stable digest for this run's observable retrieval output."""
+
+        return _json_digest(
+            {
+                "name": self.name,
+                "metrics": self.metrics,
+                "diagnostics": self.diagnostics,
+                "examples": [item.to_dict() for item in self.examples],
+            }
+        )
+
 
 @dataclass(frozen=True)
 class EvalSuite:
@@ -467,6 +481,60 @@ class EvalSuite:
 
     def compare(self, retrievers: dict[str, Retriever], *, k: int = 10) -> dict[str, EvalRun]:
         return {name: self.evaluate(retriever, name=name, k=k) for name, retriever in retrievers.items()}
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable digest for eval queries, gold refs, source hashes, and metadata."""
+
+        return _json_digest([example.to_dict() for example in self.examples])
+
+    def summary(self) -> dict[str, Any]:
+        """Portable eval-suite metadata used to keep runs comparable."""
+
+        query_styles = Counter(_query_style(example) for example in self.examples)
+        gold_modes = Counter(_gold_mode(example, self.corpus.expand_refs(example.gold_refs)) for example in self.examples)
+        return {
+            "schema": "refmark.eval_suite_summary.v1",
+            "fingerprint": self.fingerprint,
+            "example_count": len(self.examples),
+            "query_styles": dict(sorted(query_styles.items())),
+            "gold_modes": dict(sorted(gold_modes.items())),
+            "source_hash_coverage": round(
+                sum(1 for example in self.examples if example.source_hashes) / max(len(self.examples), 1),
+                4,
+            ),
+        }
+
+    def run_artifact(
+        self,
+        run: EvalRun,
+        *,
+        settings: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a self-contained comparable evidence-eval artifact."""
+
+        return {
+            "schema": "refmark.eval_run_artifact.v1",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "run_name": run.name,
+            "run_fingerprint": run.fingerprint,
+            "comparison_key": _json_digest(
+                {
+                    "corpus_fingerprint": self.corpus.fingerprint,
+                    "eval_suite_fingerprint": self.fingerprint,
+                    "settings": settings or {},
+                    "run_name": run.name,
+                }
+            ),
+            "corpus": self.corpus.snapshot().to_dict(),
+            "eval_suite": self.summary(),
+            "settings": dict(settings or {}),
+            "artifacts": dict(artifacts or {}),
+            "metrics": run.metrics,
+            "diagnostics": run.diagnostics,
+            "results": [item.to_dict() for item in run.examples],
+        }
 
 
 def _evaluate_example(example: EvalExample, corpus: CorpusMap, retriever: Retriever, *, k: int) -> EvalExampleResult:

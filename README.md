@@ -128,6 +128,8 @@ The stable package surface is intentionally small:
   `eval-index` for corpus-to-eval workflows.
 - `feedback-diagnostics` and `analyze_feedback` for turning production search
   events into adaptation review queues.
+- `discover`, `discovery-map`, and `repair-discovery-clusters` for reviewable
+  corpus overview maps and discovery-agent repair loops.
 - `highlight`, `parse_citation_refs`, and citation scoring helpers for
   reviewable model citations.
 - `Refmarker` for pass-through marking and shadow registries.
@@ -343,6 +345,11 @@ retrieval settings hashes, stale-ref validation, hard-ref/confusion heatmaps,
 and score-margin confidence gates. That is the core evidence pipeline: compare
 retrieval variants by whether they recover the right refs/ranges, then adapt
 the hard zones instead of guessing from answer prose.
+
+For the artifact contract behind reproducible comparisons, see
+[Evidence Eval Artifacts](docs/EVIDENCE_EVAL_ARTIFACTS.md). For research
+directions that should stay distinct from the core product claim, see
+[Refmark Research Angles](docs/RESEARCH_ANGLES.md).
 
 Recent example work adds the next visible layer of that loop: an evidence
 heatmap/workbench for a FastAPI documentation corpus. It groups regions by the

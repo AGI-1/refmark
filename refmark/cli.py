@@ -13,7 +13,8 @@ from refmark.citations import citation_refs_to_strings, parse_citation_refs
 from refmark.core import inject, strip
 from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
-from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, review_discovery, write_discovery
+from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, repair_discovery_clusters, review_discovery, write_discovery
+from refmark.discovery_heatmap import write_discovery_map_html
 from refmark.edit import apply_ref_diff
 from refmark.feedback import analyze_feedback, read_feedback_jsonl
 from refmark.highlight import highlight_refs, render_highlight_html, render_highlight_json, render_highlight_text
@@ -263,6 +264,13 @@ def main():
     discover_parser.add_argument("--max-input-tokens", type=int, default=180000)
     discover_parser.add_argument("--window-tokens", type=int, default=None, help="Process discovery in region-safe windows of this token size.")
     discover_parser.add_argument("--overlap-regions", type=int, default=1, help="Region overlap between discovery windows.")
+    discover_parser.add_argument(
+        "--cluster-strategy",
+        choices=["doc_id", "source_tree", "tag_graph", "balanced_terms", "llm_topics", "llm_intents"],
+        default="doc_id",
+        help="Discovery cluster recipe for overview/eval boards.",
+    )
+    discover_parser.add_argument("--target-clusters", type=int, default=40, help="Preferred cluster count for non-structural strategies.")
 
     review_discovery_parser = subparsers.add_parser(
         "review-discovery",
@@ -281,6 +289,35 @@ def main():
     discovery_card_parser.add_argument("discovery", help="Discovery JSON path.")
     discovery_card_parser.add_argument("--ref", required=True, help="Stable ref such as doc:P03.")
     discovery_card_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path.")
+
+    discovery_map_parser = subparsers.add_parser(
+        "discovery-map",
+        help="Render a discovery cluster manifest as an inspectable HTML map.",
+    )
+    discovery_map_parser.add_argument("manifest", help="Manifest JSONL path.")
+    discovery_map_parser.add_argument("discovery", help="Discovery JSON path.")
+    discovery_map_parser.add_argument("-o", "--output", required=True, help="HTML output path.")
+    discovery_map_parser.add_argument("--title", default="Refmark Discovery Cluster Map")
+
+    repair_clusters_parser = subparsers.add_parser(
+        "repair-discovery-clusters",
+        help="Ask a discovery agent to repair the cluster layer of a discovery manifest.",
+    )
+    repair_clusters_parser.add_argument("manifest", help="Manifest JSONL path.")
+    repair_clusters_parser.add_argument("discovery", help="Discovery JSON path.")
+    repair_clusters_parser.add_argument("-o", "--output", required=True, help="Repaired discovery JSON output path.")
+    repair_clusters_parser.add_argument("--source", choices=["local", "openrouter"], default="openrouter")
+    repair_clusters_parser.add_argument("--model", default="qwen/qwen-turbo")
+    repair_clusters_parser.add_argument("--endpoint", default=OPENROUTER_CHAT_URL)
+    repair_clusters_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
+    repair_clusters_parser.add_argument(
+        "--cluster-strategy",
+        choices=["doc_id", "source_tree", "tag_graph", "balanced_terms", "llm_topics", "llm_intents"],
+        default=None,
+        help="Override the strategy label for repaired clusters.",
+    )
+    repair_clusters_parser.add_argument("--target-clusters", type=int, default=None)
+    repair_clusters_parser.add_argument("--max-input-tokens", type=int, default=40000)
 
     question_plan_parser = subparsers.add_parser(
         "question-plan",
@@ -378,6 +415,10 @@ def main():
         _handle_review_discovery(args)
     elif args.command == "discovery-card":
         _handle_discovery_card(args)
+    elif args.command == "discovery-map":
+        _handle_discovery_map(args)
+    elif args.command == "repair-discovery-clusters":
+        _handle_repair_discovery_clusters(args)
     elif args.command == "question-plan":
         _handle_question_plan(args)
     elif args.command == "init-pipeline-config":
@@ -678,12 +719,26 @@ def _handle_eval_index(args):
     validation = suite.validate_refs()
     stale = [item.to_dict() for item in suite.stale_examples()]
     ci_status = _eval_ci_status(run.metrics, len(stale), args)
+    run_artifact = suite.run_artifact(
+        run,
+        settings=settings,
+        artifacts={
+            "index": args.index,
+            "manifest": args.manifest,
+            "examples": args.examples,
+            "retriever_results": args.retriever_results,
+        },
+    )
     payload = {
         "schema": "refmark.eval_index_report.v1",
         "index": args.index,
         "manifest": args.manifest,
         "examples": args.examples,
         "settings": settings,
+        "corpus_fingerprint": corpus.fingerprint,
+        "eval_suite_fingerprint": suite.fingerprint,
+        "run_fingerprint": run.fingerprint,
+        "comparison_key": run_artifact["comparison_key"],
         "metrics": run.metrics,
         "diagnostics": run.diagnostics,
         "validation": validation,
@@ -691,6 +746,7 @@ def _handle_eval_index(args):
         "ci_status": ci_status,
         "provenance": provenance,
         "provenance_check": provenance_check,
+        "run_artifact": run_artifact,
         "results": [item.to_dict() for item in run.examples],
     }
     output = json.dumps(payload, indent=2)
@@ -773,6 +829,8 @@ def _handle_discover(args):
         max_input_tokens=args.max_input_tokens,
         window_tokens=args.window_tokens,
         overlap_regions=args.overlap_regions,
+        cluster_strategy=args.cluster_strategy,
+        target_clusters=args.target_clusters,
     )
     write_discovery(discovery, args.output)
     print(
@@ -819,6 +877,31 @@ def _handle_discovery_card(args):
         print(f"[OK] Wrote discovery context card for {args.ref} to {args.output}", file=sys.stderr)
     else:
         print(output)
+
+
+def _handle_discovery_map(args):
+    records = read_manifest(args.manifest)
+    discovery = load_discovery(args.discovery)
+    write_discovery_map_html(records, discovery, args.output, title=args.title)
+    print(f"[OK] Wrote discovery cluster map with {len(discovery.clusters)} clusters to {args.output}", file=sys.stderr)
+
+
+def _handle_repair_discovery_clusters(args):
+    records = read_manifest(args.manifest)
+    discovery = load_discovery(args.discovery)
+    repaired = repair_discovery_clusters(
+        discovery,
+        records,
+        source=args.source,
+        model=args.model,
+        endpoint=args.endpoint,
+        api_key_env=args.api_key_env,
+        cluster_strategy=args.cluster_strategy,
+        target_clusters=args.target_clusters,
+        max_input_tokens=args.max_input_tokens,
+    )
+    write_discovery(repaired, args.output)
+    print(f"[OK] Wrote repaired discovery clusters ({len(repaired.clusters)} clusters) to {args.output}", file=sys.stderr)
 
 
 def _handle_question_plan(args):

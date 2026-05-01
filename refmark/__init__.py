@@ -9,9 +9,11 @@ from refmark.discovery import (
     build_discovery_context_card,
     discover_corpus,
     load_discovery,
+    repair_discovery_clusters,
     review_discovery,
     write_discovery,
 )
+from refmark.discovery_heatmap import discovery_map_items, render_discovery_map_html, write_discovery_map_html
 from refmark.feedback import FeedbackEvent, FeedbackReport, analyze_feedback, read_feedback_jsonl
 from refmark.documents import AlignmentReport, DocumentMap, align_documents, map_document
 from refmark.edit import apply_ref_diff
@@ -119,6 +121,7 @@ __all__ = [
     "build_section_map",
     "default_full_pipeline_config",
     "discover_corpus",
+    "discovery_map_items",
     "diagnose_results",
     "evaluate_alignment_coverage",
     "expand_region_context",
@@ -135,6 +138,8 @@ __all__ = [
     "read_feedback_jsonl",
     "render_coverage_html",
     "render_coverage_report_html",
+    "render_discovery_map_html",
+    "repair_discovery_clusters",
     "review_discovery",
     "Refmarker",
     "RefmarkRegistry",
@@ -156,6 +161,7 @@ __all__ = [
     "validate_provenance",
     "validate_citation_refs",
     "write_discovery",
+    "write_discovery_map_html",
     "write_full_pipeline_config_template",
     "write_manifest",
     "__version__",

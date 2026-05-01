@@ -149,6 +149,219 @@ The first cluster layer is intentionally simple. It is a navigation/review seed,
 not a final ontology. Later LLM normalization can rename, split, and merge
 clusters while preserving the same ref lists.
 
+## Discovery Cluster Strategies
+
+Clusters are metadata over refs, not replacements for refs. A ref remains the
+atomic evidence address; clusters are overview/evaluation units used by editor
+boards, explorer maps, and agent navigation. Heatmaps, confusion pairs, query
+magnets, and stale refs are metrics over a cluster layer, not clustering
+strategies by themselves.
+
+Tags are supporting evidence for clusters, not the cluster ontology. Generic
+term buckets are weak navigation. The useful direction is typed metadata such as
+entity/action/property tags, audience/task intents, and source structure. Those
+signals can explain or repair a cluster, but they should not force the primary
+map to be a bag of nouns.
+
+Current deterministic strategies:
+
+- `doc_id`: group refs by source document id. This is the best default when a
+  corpus has meaningful files, pages, or TOC structure.
+- `source_tree`: build a parent/child hierarchy from source paths or structured
+  document ids. This is the best first map for documentation sites, wikis with
+  path-like article ids, and corpora where navigation should mirror how humans
+  browse the source.
+- `tag_graph`: extract normalized high-signal tags per region, assign each ref
+  to a dominant shared tag, and fold small buckets into `other topics`. This is
+  useful for flat wiki-style corpora because the output is explainable and
+  human-reviewable.
+- `balanced_terms`: build local term vectors from rare-but-repeated terms, pick
+  diverse seeds, and assign refs under a soft capacity. This is a no-embedding
+  proxy for balanced semantic partitions, mainly for dashboard/explorer views
+  when source structure creates too many tiny blocks. It is sensitive to noisy
+  source artifacts and should prefer reviewed terminology from discovery when
+  available.
+
+LLM-backed strategies:
+
+- `llm_topics`: ask the discovery model to propose normalized topic/editor
+  clusters. This is intended for flat wiki collections, legal corpora, and
+  heterogeneous documentation where file structure is too shallow or too noisy
+  for review boards.
+- `llm_intents`: ask the discovery model to cluster by user task/question
+  intent. This is useful when the user-facing navigation question is "what
+  should I search for?" rather than "which source folder is this in?"
+
+LLM clusters are sanitized against the manifest: invalid refs are ignored,
+duplicate primary assignments are removed, and unassigned refs are folded into
+deterministic backfill clusters. That keeps the cluster layer reviewable without
+letting the model invent addresses. LLM clustering uses compact per-region cards
+instead of full raw text so broad overview passes can see more refs within the
+same context budget.
+
+Example:
+
+```bash
+python -m refmark.cli discover corpus.refmark.jsonl \
+  -o corpus.discovery.json \
+  --cluster-strategy source_tree \
+  --target-clusters 40
+
+python -m refmark.cli discover corpus.refmark.jsonl \
+  -o corpus.discovery.llm_topics.json \
+  --source openrouter \
+  --model qwen/qwen-turbo \
+  --cluster-strategy llm_topics \
+  --target-clusters 40
+
+python -m refmark.cli discovery-map corpus.refmark.jsonl corpus.discovery.json \
+  -o corpus.discovery_map.html \
+  --title "Corpus Discovery Map"
+
+python -m refmark.cli repair-discovery-clusters corpus.refmark.jsonl \
+  corpus.discovery.llm_topics.json \
+  -o corpus.discovery.llm_topics.repaired.json \
+  --model qwen/qwen-turbo \
+  --cluster-strategy llm_topics \
+  --target-clusters 40
+```
+
+`discovery-map` renders a drill-down view. The simplest case is
+cluster -> block, but cluster manifests may also use `parent_id` to form
+hierarchies such as corpus section -> review window -> refmarked block. This is
+important for corpora with thousands of regions: a flat 40-cluster map can hide
+too much structure, while a 5,000-block map is not reviewable. The right panel is
+for the selected cluster/block; global run metadata should stay secondary so the
+map remains usable as an explorer view.
+
+The map defaults to an order-preserving layout. This matters for law codes,
+manuals, and other sequential corpora where left-to-right/top-to-bottom should
+roughly follow source order. A balanced layout remains useful for dashboard
+inspection, but it may rearrange blocks by size and obscure source sequence.
+
+For flat corpora, a practical workflow is:
+
+```text
+region refs
+ -> local/LLM summaries and terms
+ -> tag_graph or balanced_terms cluster manifest
+ -> editor heatmap and explorer overview
+ -> evaluate cluster@k, region@k, query magnets, and weak zones
+ -> HiL/LLM review renames/splits/merges clusters
+```
+
+Future model-backed strategies should follow the same contract: emit a
+reviewable `clusters` list with `cluster_id`, label, refs, terms, source, and
+strategy. The system should then score whether the clusters are useful by
+cluster-level retrieval, label coherence, query-magnet concentration, and
+cross-cluster confusion.
+
+Early feel-test guidance:
+
+- `tag_graph` is best for explaining "why are these refs together?", but it
+  needs corpus/language normalization and usually leaves an `other topics`
+  bucket for HiL/LLM review.
+- `source_tree` should be tried before tag/term clustering whenever source
+  paths carry real navigation structure. It can then be repaired with LLM topic
+  names instead of forcing tags to invent the ontology.
+- `balanced_terms` is best for a first overview board because cluster sizes are
+  stable and readable, but labels are weaker and should be reviewed or renamed.
+  For technical corpora, it works best after filtering common language words,
+  normalizing variants, and using rare domain terms rather than raw frequency.
+- For flat wiki-style collections, render both. Use `balanced_terms` for the
+  map shape and `tag_graph` for candidate labels, tags, and merge/split hints.
+- For real product discovery, run at least one LLM-backed strategy as a review
+  candidate. The deterministic maps are valuable baselines; the LLM pass is
+  where normalized labels, intent clusters, and cross-document topic names can
+  be tested against the same ref-level evaluation harness.
+- High deterministic backfill after an LLM pass is itself a data smell: either
+  the prompt/model did not understand the corpus shape, the requested strategy
+  is too abstract for the source, or the sample is too sparse for coherent
+  cluster labels. BGB-style legal corpora exposed this more clearly than
+  technical wiki documentation.
+- Broad labels with glue words such as "and" are usually a smell in overview
+  clusters. They often mean the cluster is compensating for missing hierarchy.
+  Prefer a parent cluster with narrower child clusters, or split the label into
+  explicit alternatives if the refs do not share one coherent concept.
+- For BGB-scale corpora, a deterministic hierarchy is already useful before any
+  LLM naming pass: top-level legal books or source collections, second-level
+  bounded section windows, and leaf-level refs. This keeps the full corpus
+  navigable while the agentic discovery loop works on better names and topic
+  normalization.
+- For flat corpora with weak or missing hierarchy, expect deterministic
+  strategies to expose normalization issues first. Source-prefix tokens,
+  boilerplate, and broad buckets such as `other topics` are not just ugly map
+  output; they are discovery review items. The next pass should either remove
+  those terms from the candidate vocabulary or ask a discovery agent to produce
+  normalized cluster labels over the same refs.
+- Current flat-corpus smoke tests show a useful split in behavior:
+  `tag_graph` is the better data-smell view because large `other topics`
+  buckets expose missing normalization; `balanced_terms` is the better shape
+  baseline because it creates evenly sized boards, but labels can become
+  rare-word soup on article-level documentation. Treat balanced labels as
+  provisional unless a review/LLM pass confirms them.
+- Repair agents need bounded, validator-friendly output. Asking a model to
+  rewrite hundreds of refs into full JSON can fail through malformed or
+  truncated JSON even when the reasoning is plausible. For larger corpora,
+  prefer hierarchical repair or cluster-by-cluster repair instead of one broad
+  all-refs rewrite.
+
+## Discovery Map Reviewability
+
+The map is not just a visualization; it is part of the discovery-agent review
+loop. A usable map should let a human or model answer:
+
+- what does this broad cluster cover?
+- which child topics or sample blocks explain the label?
+- is this an `other topics` bucket hiding missing normalization?
+- should this be split, merged, renamed, excluded, or expanded with metadata?
+
+The renderer supports nested `parent_id` chains, so it is not inherently capped
+at two levels. The current limitation is upstream: most deterministic and repair
+strategies still produce one flat layer, and some demos only add one child
+level. For larger or flatter corpora, agents should be allowed to create deeper
+structures such as:
+
+```text
+corpus overview -> topic family -> concrete subtopic -> refs
+```
+
+Broad clusters should carry useful summaries: a normalized title, tag badges,
+sample topics, child cluster previews, and review notes. Huge `other topics`
+clusters are never a good final state. They are review issues that should
+trigger one of:
+
+- stopword/noise normalization;
+- source boilerplate exclusion;
+- split by child topics;
+- LLM review of only the broad cluster;
+- creation of an intermediate parent layer.
+
+Current repair agents do not yet get a full visual feedback loop. They receive
+current clusters, deterministic review issues, and compact region cards, but
+they do not inspect the rendered board or run a post-repair map-quality check.
+That is the next agentic shape: propose hierarchy -> render/review metrics ->
+repair only weak/broad nodes -> repeat.
+
+When a map exposes poor high-level clusters but useful drill-down blocks, use
+`repair-discovery-clusters` rather than editing clusters by hand. The command
+acts as a discovery-agent tool: it sends current clusters, deterministic review
+issues, and compact region cards to a model, then replaces only the cluster
+layer after sanitizing refs against the manifest. This keeps the loop
+reproducible:
+
+```text
+discover -> map exposes weak clusters -> repair cluster layer -> remap -> review
+```
+
+The repair sanitizer should preserve the agent's semantic intent, not merely
+sort by size. BGB exposed a failure mode where target-count enforcement merged
+useful one-ref legal clusters into `other reviewed topics` while keeping weak
+backfill clusters. The current repair path first tries semantic coalescing
+(`Contract Remedies and Obligations`, `Property Rights and Claims`, etc.) before
+falling back to generic overflow. This is still a review aid, not a final legal
+taxonomy.
+
 ## Discovery Context Cards
 
 Question generation should not receive the entire discovery manifest. It should

@@ -7,10 +7,11 @@ from dataclasses import asdict, dataclass
 from typing import Iterable
 
 
-REF_TOKEN_RE = re.compile(r"(?:(?P<doc>[A-Za-z0-9_.-]+):)?(?P<region>[A-Za-z]+\d+)")
+REGION_ID_PATTERN = r"[A-Za-z][A-Za-z0-9_]*\d+[A-Za-z0-9_]*"
+REF_TOKEN_RE = re.compile(rf"(?:(?P<doc>[A-Za-z0-9_.-]+):)?(?P<region>{REGION_ID_PATTERN})")
 RANGE_RE = re.compile(
-    r"^\s*(?:(?P<start_doc>[A-Za-z0-9_.-]+):)?(?P<start>[A-Za-z]+\d+)\s*(?P<op>-|\.\.)\s*"
-    r"(?:(?P<end_doc>[A-Za-z0-9_.-]+):)?(?P<end>[A-Za-z]+\d+)\s*$"
+    rf"^\s*(?:(?P<start_doc>[A-Za-z0-9_.-]+):)?(?P<start>{REGION_ID_PATTERN})\s*(?P<op>-|\.\.)\s*"
+    rf"(?:(?P<end_doc>[A-Za-z0-9_.-]+):)?(?P<end>{REGION_ID_PATTERN})\s*$"
 )
 
 

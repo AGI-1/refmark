@@ -76,6 +76,41 @@ def test_eval_suite_loads_jsonl_and_writes_run_report(tmp_path):
     assert '"hit_at_k": 1.0' in report_path.read_text(encoding="utf-8")
 
 
+def test_eval_suite_builds_comparable_run_artifact():
+    corpus = CorpusMap.from_records(
+        [
+            _record("P01", "Refunds are available within 30 days.", 1),
+            _record("P02", "Expedited shipping is non-refundable.", 2),
+        ],
+        revision_id="git:abc123",
+        metadata={"source_path": "docs/policy.md"},
+    )
+    suite = EvalSuite(
+        examples=[
+            EvalExample("refund window?", ["policy:P01"], metadata={"query_style": "direct"}).with_source_hashes(corpus),
+            EvalExample("shipping refund?", ["policy:P02"], metadata={"query_style": "concern"}).with_source_hashes(corpus),
+        ],
+        corpus=corpus,
+    )
+
+    run = suite.evaluate(lambda query: ["policy:P01"] if "window" in query else ["policy:P02"], k=1)
+    artifact = suite.run_artifact(run, settings={"strategy": "test", "top_k": 1}, artifacts={"examples": "eval.jsonl"})
+
+    assert artifact["schema"] == "refmark.eval_run_artifact.v1"
+    assert artifact["corpus"]["fingerprint"] == corpus.fingerprint
+    assert artifact["corpus"]["revision_id"] == "git:abc123"
+    assert artifact["eval_suite"]["fingerprint"] == suite.fingerprint
+    assert artifact["eval_suite"]["query_styles"] == {"concern": 1, "direct": 1}
+    assert artifact["eval_suite"]["source_hash_coverage"] == 1.0
+    assert artifact["run_fingerprint"] == run.fingerprint
+    assert artifact["comparison_key"] == suite.run_artifact(
+        run,
+        settings={"strategy": "test", "top_k": 1},
+        artifacts={"examples": "other.jsonl"},
+    )["comparison_key"]
+    assert artifact["comparison_key"] != suite.run_artifact(run, settings={"strategy": "other", "top_k": 1})["comparison_key"]
+
+
 def test_eval_suite_preserves_saved_source_hashes_for_stale_checks(tmp_path):
     original = CorpusMap.from_records([_record("P01", "Original refund text.", 1)])
     current = CorpusMap.from_records([_record("P01", "Changed refund text.", 1)])

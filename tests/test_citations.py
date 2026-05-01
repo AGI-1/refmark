@@ -12,6 +12,13 @@ def test_parse_citation_refs_accepts_refs_ranges_and_doc_ids():
     assert parsed[2].end_doc_id == "policy"
 
 
+def test_parse_citation_refs_accepts_underscore_region_ids():
+    parsed = parse_citation_refs("[bgb:S_58, bgb:S_1687_A01-bgb:S_1687_A03]")
+
+    assert citation_refs_to_strings(parsed) == ["bgb:S_58", "bgb:S_1687_A01-bgb:S_1687_A03"]
+    assert parsed[1].is_range
+
+
 def test_parse_citation_refs_rejects_cross_document_ranges():
     with pytest.raises(ValueError, match="cannot cross documents"):
         parse_citation_refs("policy:P01-contract:P02")

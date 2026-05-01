@@ -96,6 +96,8 @@ class DiscoveryConfig:
     max_input_tokens: int = 180_000
     window_tokens: int | None = None
     overlap_regions: int = 1
+    cluster_strategy: str = "doc_id"
+    target_clusters: int = 40
     review_enabled: bool = True
     max_review_issues: int = 50
 
@@ -346,6 +348,8 @@ discovery:
   max_input_tokens: 180000
   window_tokens: null
   overlap_regions: 1
+  cluster_strategy: doc_id
+  target_clusters: 40
   review_enabled: true
   max_review_issues: 50
 
