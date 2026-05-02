@@ -14,6 +14,7 @@ python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
 python examples/docs_navigation_pipeline/run.py
+python examples/evidence_lifecycle_benchmark/evaluate_ref_stability_mutations.py --dataset beir/scifact/test
 python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
 python examples/rag_retrieval_benchmark/run.py
 ```
@@ -106,6 +107,17 @@ documentation navigation:
 It intentionally avoids vector databases and runtime model calls. Larger
 comparisons against embeddings or hosted retrievers can still be scored through
 `eval-index --retriever-results`.
+
+## Evidence Lifecycle Benchmark
+
+`evidence_lifecycle_benchmark` tests what happens to maintained evidence labels
+when a corpus changes. It compares stable ref migration against naive same-path
+or same-ordinal chunk ids on controlled mutations and Git-backed documentation
+revision pairs.
+
+This is the "corpus-as-test-suite over time" path: old eval labels, citations,
+metadata, and review notes should be preserved, migrated, reviewed, or marked
+stale instead of silently pointing to wrong evidence after re-chunking.
 
 ## Browser Page Search
 

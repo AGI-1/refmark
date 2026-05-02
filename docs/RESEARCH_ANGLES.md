@@ -50,6 +50,69 @@ Method:
 Key metric: did the system retrieve the source evidence needed to answer the
 benchmark question, not only did it generate a plausible answer?
 
+### Active Benchmarking Track
+
+Core question:
+
+> Does Refmark-based evaluation let us build retrieval systems that perform
+> better at finding relevant information?
+
+This should be tested as an optimization loop, not only as a reporting format.
+The experiment should compare a plain baseline against systems adapted using
+only training/dev evidence diagnostics produced from a refmarked corpus.
+
+Minimum design:
+
+1. Pick an external QA/retrieval benchmark with a source corpus and held-out
+   questions.
+2. Convert the corpus into a `CorpusMap` with stable refs/ranges.
+3. Map benchmark gold passages, documents, or support facts to refs/ranges.
+4. Split questions into train/dev/test or use the benchmark's existing split.
+5. Run baseline retrievers without Refmark adaptation.
+6. Use Refmark metrics on train/dev only to identify weak regions, query
+   magnets, stale/ambiguous labels, missing metadata, and confusion pairs.
+7. Apply a bounded adaptation policy: metadata/doc2query aliases, source
+   hierarchy, query-magnet exclusion, context expansion, hybrid weighting, or
+   reranker training.
+8. Evaluate once on held-out questions using the same evidence metrics and, when
+   useful, answer-level metrics.
+
+The claim is valid only if held-out evidence retrieval improves, for example:
+
+- higher gold-document/ref hit@k;
+- higher evidence coverage for ranges or multi-hop support;
+- better MRR/top-1 without losing hit@k;
+- lower context cost at the same evidence recall;
+- fewer wrong-top confusions or query-magnet hits;
+- improved downstream grounded answer quality.
+
+Do not claim that Refmark improves QA just because it makes failures visible.
+Visibility is the mechanism. The research question is whether that visibility
+can guide changes that improve held-out retrieval or answer grounding.
+
+Preliminary no-training BEIR checks, run on the Ubuntu experiment host, are
+mixed in the useful way:
+
+| Corpus | Scope | Baseline | Best Refmark Variant | Result |
+| --- | --- | --- | --- | --- |
+| SciFact | 5,183 docs, 300 queries, 14,498 regions | doc BM25 hit@10 0.803 | enriched region->doc max hit@10 0.790 | regionization alone did not beat document BM25 |
+| NFCorpus | 3,633 docs, 323 queries, 10,995 regions | doc BM25 hit@10 0.690 | enriched region->doc max hit@10 0.669 | regionization alone did not beat document BM25 |
+| ArguAna | 8,674 docs, first 100 queries, 19,157 regions | doc BM25 hit@10 0.690 | enriched region->doc max hit@10 0.810 | region evidence improved top-10 on this slice |
+
+Early interpretation:
+
+- naive summing of child-region scores into a parent document is harmful;
+- max-region parent aggregation is the first sane default;
+- source-only enrichment has small or corpus-dependent effects;
+- Refmark does not automatically improve document-level retrieval, but it makes
+  aggregation and adaptation choices measurable;
+- larger datasets such as FiQA need a faster/vectorized benchmark harness or
+  stronger hardware because the current pure-Python BM25 loop becomes the
+  bottleneck before training or embedding costs matter.
+
+See `docs/REFMARK_BENCHMARKING_NOTES.md` for the current external benchmark
+summary, including vectorized lexical runs and MiniLM/BGE embedding baselines.
+
 ## 3. Corpus Classification and Coarse Navigation
 
 Question: can small local models learn to route questions to corpus areas,
@@ -149,3 +212,15 @@ Useful outputs:
 
 This is likely the strongest long-term framing: a refmarked corpus becomes a
 regression-testable evidence space.
+
+## 8. Evidence Lifecycle Under Corpus Change
+
+Question: can stable refs/ranges reduce silent corruption in maintained
+retrieval, evaluation, citation, and training labels after corpus revisions?
+
+This is currently the most Refmark-specific benchmark direction. Static
+retrieval benchmarks can make Refmark look like named chunking; versioned
+evidence benchmarks test the addressability claim directly.
+
+See `docs/EVIDENCE_LIFECYCLE_BENCHMARK.md` and
+`examples/evidence_lifecycle_benchmark/`.
