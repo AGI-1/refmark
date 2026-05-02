@@ -286,14 +286,22 @@ for name, run in runs.items():
     print(name, run.metrics)
 ```
 
-Refmark can also export evidence rows and metrics for existing lifecycle tools.
-The adapter has no RAGAS/LangSmith/MLflow dependency; it produces ordinary
-records that those tools can ingest beside their own answer-quality metrics.
+Refmark can also export evidence rows, trace metadata, and lifecycle metrics for
+existing eval/observability tools. The adapters have no Ragas/DeepEval/Phoenix/
+Langfuse dependency; they produce ordinary records that those tools can ingest
+beside their own answer-quality, trace, latency, and cost metrics.
 
 ```python
-from refmark import export_ragas_rows, refmark_evidence_metrics
+from refmark import (
+    export_deepeval_cases,
+    export_ragas_rows,
+    export_trace_events,
+    refmark_evidence_metrics,
+)
 
 rows = export_ragas_rows(suite, runs["hybrid"], answers=generated_answers)
+cases = export_deepeval_cases(suite, runs["hybrid"], answers=generated_answers)
+traces = export_trace_events(suite, runs["hybrid"], tool="phoenix")
 metrics = refmark_evidence_metrics(suite, runs["hybrid"])
 ```
 

@@ -1,8 +1,9 @@
 # Eval Tool Integrations
 
-Refmark is meant to sit below existing RAG evaluation tools, not replace them.
-Tools such as RAGAS, LangSmith, MLflow, or custom dashboards can continue to
-measure answer quality, faithfulness, latency, and cost. Refmark adds the
+Refmark is meant to sit below existing RAG evaluation and lifecycle tools, not
+replace them. Tools such as Ragas, DeepEval, Phoenix, Langfuse, LangSmith,
+MLflow, or custom dashboards can continue to measure answer quality,
+faithfulness, latency, cost, traces, and production behavior. Refmark adds the
 evidence-address layer:
 
 - did the retriever return the expected source refs/ranges?
@@ -70,6 +71,94 @@ The `retrieved_contexts` and `reference` fields are resolved source text, so the
 same rows can be sent to answer-level evaluators. The refs stay attached so a
 dashboard can still jump back to exact regions.
 
+## DeepEval-Style Rows
+
+`export_deepeval_cases(...)` emits dependency-free dictionaries shaped like
+DeepEval `LLMTestCase` inputs:
+
+```python
+from refmark import export_deepeval_cases
+
+cases = export_deepeval_cases(
+    suite,
+    run,
+    answers={"How do I configure auth?": "Use OAuth2 settings."},
+)
+```
+
+Each row includes:
+
+- `input`
+- `actual_output`
+- `expected_output`
+- `retrieval_context`
+- `context`
+- `refmark.gold_refs`
+- `refmark.retrieved_refs`
+- `refmark.context_refs`
+- `refmark.hit_at_k`
+- `refmark.gold_coverage`
+- `refmark.source_hashes`
+
+Callers that already use DeepEval can turn those dictionaries into native test
+case objects. Refmark intentionally does not import DeepEval directly in the
+core package.
+
+## Phoenix / Langfuse / Trace-Style Rows
+
+`export_trace_events(...)` emits one retrieval event per query:
+
+```python
+from refmark import export_trace_events
+
+events = export_trace_events(suite, run, tool="phoenix")
+```
+
+Each event contains stable fingerprints and attributes that fit naturally into
+trace metadata or span attributes:
+
+- `refmark.corpus_fingerprint`
+- `refmark.eval_suite_fingerprint`
+- `refmark.run_fingerprint`
+- `refmark.gold_refs`
+- `refmark.retrieved_refs`
+- `refmark.context_refs`
+- `refmark.hit_at_1`
+- `refmark.hit_at_k`
+- `refmark.gold_coverage`
+- `refmark.region_precision`
+- `refmark.source_hashes`
+- `refmark.stale`
+
+For Langfuse-style usage, store the event as a trace/span with the `attributes`
+object as metadata. For Phoenix/OpenInference-style usage, the same attributes
+can be attached to retrieval spans or dataset examples.
+
+## Lifecycle Rows
+
+`export_lifecycle_summary_rows(...)` converts `lifecycle-git` `summary_rows`
+into tracker rows:
+
+```python
+from refmark import export_lifecycle_summary_rows
+
+rows = export_lifecycle_summary_rows(lifecycle_payload, tool="mlflow")
+```
+
+Promoted metrics include:
+
+- `refmark_auto_rate`
+- `refmark_review_rate`
+- `refmark_stale_rate`
+- `naive_correct_rate`
+- `naive_silent_wrong_rate`
+- `naive_missing_rate`
+- `workload_reduction_vs_audit`
+
+This is the lifecycle integration point: a tracker can store how much of an eval
+suite survived a corpus revision, how much needs review, and how much would have
+silently pointed to the wrong place under naive chunk identity.
+
 ## Refmark Metrics
 
 `refmark_evidence_metrics(suite, run)` emits a compact metrics payload:
@@ -118,6 +207,21 @@ answer-quality, and model-cost measurements.
 
 Refmark does not require BM25, embeddings, vector databases, rerankers, or
 training. It gives those choices a shared testable target.
+
+## What Was Tested
+
+The adapter layer is currently tested as dependency-free handoff data, not as
+live SDK calls into each vendor package. The tests verify that:
+
+- resolved source text is present for answer-level evaluators;
+- gold/retrieved/context refs remain attached;
+- source hashes survive export for stale checks;
+- trace rows contain stable fingerprints and stale-state metadata;
+- lifecycle rows preserve corpus revision metrics.
+
+This is deliberate. It keeps Refmark's package surface lightweight while making
+the integration boundary explicit. Thin optional SDK-specific shims can be added
+later without changing the evidence metrics or row schemas.
 
 ## Caveats
 

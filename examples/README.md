@@ -9,6 +9,7 @@ Run them from the repository root:
 ```bash
 python examples/citation_qa/run_eval.py
 python examples/data_smells/run.py
+python examples/eval_tool_integrations_demo/run.py
 python examples/judge_free_rewards/run.py
 python examples/lifecycle_ci_demo/run.py
 python examples/multidiff_demo/run.py
@@ -123,6 +124,14 @@ stale instead of silently pointing to wrong evidence after re-chunking.
 `lifecycle_ci_demo` is the smaller product-shaped version: it maps two document
 revisions, validates a saved `query -> gold_refs` row, and emits a lifecycle
 report that can fail CI when stale examples exceed a configured threshold.
+
+## Eval Tool Integrations
+
+`eval_tool_integrations_demo` exports the same Refmark eval run as
+Ragas-style rows, DeepEval-style cases, and Phoenix/Langfuse-style trace events.
+The adapters are dependency-free handoff formats: existing eval/observability
+tools can ingest the rows while Refmark preserves exact refs, source hashes,
+stale-state metadata, and corpus/run fingerprints.
 
 ## Browser Page Search
 

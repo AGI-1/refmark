@@ -199,6 +199,26 @@ def test_judge_free_rewards_example_runs():
     assert first["exact"]["reward"] > first["overcite_neighbor"]["reward"] > first["wrong_location"]["reward"]
 
 
+def test_eval_tool_integrations_demo_runs():
+    result = subprocess.run(
+        [sys.executable, "examples/eval_tool_integrations_demo/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_dir = PUBLISH_ROOT / "examples" / "eval_tool_integrations_demo" / "output"
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    ragas_row = json.loads((output_dir / "ragas_rows.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    trace_row = json.loads((output_dir / "trace_events.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert summary["ragas_rows"] == 2
+    assert summary["summary"]["metrics"]["hit_at_k"] == 1.0
+    assert ragas_row["refmark"]["source_hashes"]
+    assert trace_row["attributes"]["refmark.corpus_fingerprint"]
+
+
 def test_lifecycle_ci_demo_runs():
     result = subprocess.run(
         [sys.executable, "examples/lifecycle_ci_demo/run.py"],

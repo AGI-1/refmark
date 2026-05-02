@@ -1,7 +1,18 @@
 import json
 
 from refmark.pipeline import RegionRecord
-from refmark.rag_adapters import eval_tool_summary, export_ragas_rows, refmark_evidence_metrics, write_ragas_jsonl
+from refmark.rag_adapters import (
+    eval_tool_summary,
+    export_deepeval_cases,
+    export_lifecycle_summary_rows,
+    export_ragas_rows,
+    export_trace_events,
+    refmark_evidence_metrics,
+    write_deepeval_jsonl,
+    write_lifecycle_tool_jsonl,
+    write_ragas_jsonl,
+    write_trace_jsonl,
+)
 from refmark.rag_eval import CorpusMap, EvalExample, EvalSuite
 
 
@@ -103,3 +114,70 @@ def test_refmark_evidence_metrics_reports_over_under_stale_and_token_costs(tmp_p
     assert summary["tool"] == "ragas"
     assert summary["metrics"]["run_fingerprint"] == run.fingerprint
     assert rows[0]["gold_refs"] == ["policy:P01"]
+
+
+def test_deepeval_and_trace_exports_preserve_refmark_metadata(tmp_path):
+    corpus = CorpusMap.from_records(
+        [
+            _record("P01", "Refund policy.", 1),
+            _record("P02", "Shipping policy.", 2),
+        ]
+    )
+    suite = EvalSuite(
+        examples=[EvalExample("What covers refunds and shipping?", ["policy:P01-policy:P02"])],
+        corpus=corpus,
+    ).with_source_hashes()
+    run = suite.evaluate(
+        lambda _query: [{"stable_ref": "policy:P01", "context_refs": ["policy:P01", "policy:P02"], "score": 1.0}],
+        k=1,
+    )
+
+    deepeval_rows = export_deepeval_cases(suite, run, answers=["Refund and shipping policy."])
+    trace_rows = export_trace_events(suite, run, tool="phoenix")
+    deepeval_path = tmp_path / "deepeval.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
+    write_deepeval_jsonl(deepeval_path, suite, run, answers=[""])
+    write_trace_jsonl(trace_path, suite, run, tool="langfuse")
+
+    assert deepeval_rows[0]["input"] == "What covers refunds and shipping?"
+    assert deepeval_rows[0]["retrieval_context"] == ["[policy:P01]\nRefund policy.", "[policy:P02]\nShipping policy."]
+    assert deepeval_rows[0]["context"] == ["[policy:P01]\nRefund policy.", "[policy:P02]\nShipping policy."]
+    assert deepeval_rows[0]["refmark"]["gold_refs"] == ["policy:P01", "policy:P02"]
+    assert trace_rows[0]["tool"] == "phoenix"
+    assert trace_rows[0]["attributes"]["refmark.context_refs"] == ["policy:P01", "policy:P02"]
+    assert trace_rows[0]["attributes"]["refmark.stale"] is False
+    assert "refmark.trace_event.v1" in trace_path.read_text(encoding="utf-8")
+    assert "retrieval_context" in deepeval_path.read_text(encoding="utf-8")
+
+
+def test_lifecycle_summary_rows_export_as_tracker_events(tmp_path):
+    payload = {
+        "summary_rows": [
+            {
+                "repo_url": "https://example.test/docs.git",
+                "subdir": "docs",
+                "old_ref": "v1",
+                "new_ref": "v2",
+                "old_labels": 10,
+                "new_regions": 12,
+                "new_tokens": 1200,
+                "refmark_auto_rate": 0.4,
+                "refmark_review_rate": 0.2,
+                "refmark_stale_rate": 0.4,
+                "naive_correct_rate": 0.5,
+                "naive_silent_wrong_rate": 0.4,
+                "naive_missing_rate": 0.1,
+                "workload_reduction_vs_audit": 0.3,
+            }
+        ]
+    }
+    out_path = tmp_path / "lifecycle_tool.jsonl"
+
+    rows = export_lifecycle_summary_rows(payload, tool="langfuse")
+    write_lifecycle_tool_jsonl(out_path, payload["summary_rows"], tool="phoenix")
+
+    assert rows[0]["schema"] == "refmark.lifecycle_tool_row.v1"
+    assert rows[0]["tool"] == "langfuse"
+    assert rows[0]["metrics"]["naive_silent_wrong_rate"] == 0.4
+    assert rows[0]["refmark"]["lifecycle"]["new_ref"] == "v2"
+    assert "refmark.lifecycle_tool_row.v1" in out_path.read_text(encoding="utf-8")

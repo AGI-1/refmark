@@ -57,9 +57,15 @@ from refmark.provenance import build_eval_provenance, file_fingerprint, validate
 from refmark.question_plan import QuestionPlanItem, build_question_plan, question_plan_to_dict
 from refmark.rag_adapters import (
     eval_tool_summary,
+    export_deepeval_cases,
+    export_lifecycle_summary_rows,
     export_ragas_rows,
+    export_trace_events,
     refmark_evidence_metrics,
+    write_deepeval_jsonl,
+    write_lifecycle_tool_jsonl,
     write_ragas_jsonl,
+    write_trace_jsonl,
 )
 from refmark.rag_eval import (
     ContextPack,
@@ -133,7 +139,10 @@ __all__ = [
     "evaluate_alignment_coverage",
     "evaluate_git_revisions",
     "eval_tool_summary",
+    "export_deepeval_cases",
+    "export_lifecycle_summary_rows",
     "export_ragas_rows",
+    "export_trace_events",
     "expand_region_context",
     "failure_heatmap",
     "file_fingerprint",
@@ -175,8 +184,11 @@ __all__ = [
     "validate_citation_refs",
     "write_discovery",
     "write_discovery_map_html",
+    "write_deepeval_jsonl",
     "write_full_pipeline_config_template",
+    "write_lifecycle_tool_jsonl",
     "write_manifest",
     "write_ragas_jsonl",
+    "write_trace_jsonl",
     "__version__",
 ]

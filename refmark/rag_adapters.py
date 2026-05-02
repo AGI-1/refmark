@@ -132,6 +132,207 @@ def write_ragas_jsonl(
     Path(path).write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
 
 
+def export_deepeval_cases(
+    suite: EvalSuite,
+    run: EvalRun,
+    *,
+    answers: Mapping[str, str] | Sequence[str] | None = None,
+    expected_outputs: Mapping[str, str] | Sequence[str] | None = None,
+    include_refmark_fields: bool = True,
+) -> list[dict[str, Any]]:
+    """Return DeepEval-style LLM test-case dictionaries.
+
+    The rows use the common `input`, `actual_output`, `expected_output`,
+    `retrieval_context`, and `context` fields while preserving Refmark evidence
+    metadata. This avoids a hard dependency on DeepEval but keeps the handoff
+    shape obvious for callers that want to construct `LLMTestCase` objects.
+    """
+
+    _ensure_aligned(suite, run)
+    rows: list[dict[str, Any]] = []
+    for index, result in enumerate(run.examples):
+        row: dict[str, Any] = {
+            "input": result.query,
+            "actual_output": _lookup_text(answers, index, result.query, default=""),
+            "expected_output": _lookup_text(
+                expected_outputs,
+                index,
+                result.query,
+                default=suite.corpus.context_pack(result.gold_refs).text,
+            ),
+            "retrieval_context": _context_texts(suite.corpus, result.context_refs),
+            "context": _context_texts(suite.corpus, suite.corpus.expand_refs(result.gold_refs)),
+        }
+        if include_refmark_fields:
+            row["refmark"] = _refmark_row_metadata(suite, run, index)
+        rows.append(row)
+    return rows
+
+
+def write_deepeval_jsonl(
+    path: str | Path,
+    suite: EvalSuite,
+    run: EvalRun,
+    *,
+    answers: Mapping[str, str] | Sequence[str] | None = None,
+    expected_outputs: Mapping[str, str] | Sequence[str] | None = None,
+    include_refmark_fields: bool = True,
+) -> None:
+    """Write DeepEval-style rows as JSONL."""
+
+    rows = export_deepeval_cases(
+        suite,
+        run,
+        answers=answers,
+        expected_outputs=expected_outputs,
+        include_refmark_fields=include_refmark_fields,
+    )
+    _write_jsonl(path, rows)
+
+
+def export_trace_events(
+    suite: EvalSuite,
+    run: EvalRun,
+    *,
+    tool: str = "generic",
+    answers: Mapping[str, str] | Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return observability-trace events for tools such as Phoenix/Langfuse.
+
+    Each row is a dependency-free trace/event payload with stable IDs,
+    fingerprints, retrieved refs, context refs, gold refs, stale status, and
+    score/margin metadata. Adapters can log this as span attributes, trace
+    metadata, or dataset examples depending on the destination tool.
+    """
+
+    _ensure_aligned(suite, run)
+    stale_by_query = {item.example.query: item.to_dict() for item in suite.stale_examples()}
+    events: list[dict[str, Any]] = []
+    for index, result in enumerate(run.examples):
+        example = suite.examples[index]
+        trace_id = _digest(
+            {
+                "corpus": suite.corpus.fingerprint,
+                "suite": suite.fingerprint,
+                "run": run.fingerprint,
+                "index": index,
+                "query": result.query,
+            }
+        )
+        events.append(
+            {
+                "schema": "refmark.trace_event.v1",
+                "tool": tool,
+                "trace_id": trace_id,
+                "span_name": f"retrieval:{run.name}",
+                "input": result.query,
+                "output": _lookup_text(answers, index, result.query, default=""),
+                "attributes": {
+                    "refmark.corpus_fingerprint": suite.corpus.fingerprint,
+                    "refmark.eval_suite_fingerprint": suite.fingerprint,
+                    "refmark.run_fingerprint": run.fingerprint,
+                    "refmark.run_name": run.name,
+                    "refmark.gold_refs": result.gold_refs,
+                    "refmark.retrieved_refs": result.retrieved_refs,
+                    "refmark.context_refs": result.context_refs,
+                    "refmark.hit_at_1": result.hit_at_1,
+                    "refmark.hit_at_k": result.hit_at_k,
+                    "refmark.gold_coverage": result.gold_coverage,
+                    "refmark.region_precision": result.region_precision,
+                    "refmark.query_style": result.query_style,
+                    "refmark.gold_mode": result.gold_mode,
+                    "refmark.top_ref": result.top_ref,
+                    "refmark.top_score": result.top_score,
+                    "refmark.score_margin": result.score_margin,
+                    "refmark.source_hashes": dict(example.source_hashes),
+                    "refmark.stale": result.query in stale_by_query,
+                    "refmark.stale_detail": stale_by_query.get(result.query),
+                },
+            }
+        )
+    return events
+
+
+def write_trace_jsonl(
+    path: str | Path,
+    suite: EvalSuite,
+    run: EvalRun,
+    *,
+    tool: str = "generic",
+    answers: Mapping[str, str] | Sequence[str] | None = None,
+) -> None:
+    """Write observability trace/event payloads as JSONL."""
+
+    _write_jsonl(path, export_trace_events(suite, run, tool=tool, answers=answers))
+
+
+def export_lifecycle_summary_rows(
+    lifecycle_payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    tool: str = "generic",
+) -> list[dict[str, Any]]:
+    """Return lifecycle-summary rows shaped for experiment trackers.
+
+    Accepts either a full `lifecycle-git` payload with `summary_rows` or a list
+    of summary rows. The output keeps the original row under `refmark.lifecycle`
+    while promoting the most useful tracker dimensions to top-level fields.
+    """
+
+    if isinstance(lifecycle_payload, Mapping):
+        rows = [dict(row) for row in lifecycle_payload.get("summary_rows", [])]
+    else:
+        rows = [dict(row) for row in lifecycle_payload]
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        run_id = _digest(
+            {
+                "repo_url": row.get("repo_url"),
+                "subdir": row.get("subdir"),
+                "old_ref": row.get("old_ref"),
+                "new_ref": row.get("new_ref"),
+            }
+        )
+        result.append(
+            {
+                "schema": "refmark.lifecycle_tool_row.v1",
+                "tool": tool,
+                "run_id": run_id,
+                "name": f"lifecycle:{row.get('old_ref')}->{row.get('new_ref')}",
+                "dataset": row.get("repo_url"),
+                "metadata": {
+                    "subdir": row.get("subdir"),
+                    "old_ref": row.get("old_ref"),
+                    "new_ref": row.get("new_ref"),
+                    "old_labels": row.get("old_labels"),
+                    "new_regions": row.get("new_regions"),
+                    "new_tokens": row.get("new_tokens"),
+                },
+                "metrics": {
+                    "refmark_auto_rate": row.get("refmark_auto_rate", 0.0),
+                    "refmark_review_rate": row.get("refmark_review_rate", 0.0),
+                    "refmark_stale_rate": row.get("refmark_stale_rate", 0.0),
+                    "naive_correct_rate": row.get("naive_correct_rate", 0.0),
+                    "naive_silent_wrong_rate": row.get("naive_silent_wrong_rate", 0.0),
+                    "naive_missing_rate": row.get("naive_missing_rate", 0.0),
+                    "workload_reduction_vs_audit": row.get("workload_reduction_vs_audit", 0.0),
+                },
+                "refmark": {"lifecycle": row},
+            }
+        )
+    return result
+
+
+def write_lifecycle_tool_jsonl(
+    path: str | Path,
+    lifecycle_payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    tool: str = "generic",
+) -> None:
+    """Write lifecycle summary rows as generic tracker JSONL."""
+
+    _write_jsonl(path, export_lifecycle_summary_rows(lifecycle_payload, tool=tool))
+
+
 def eval_tool_summary(suite: EvalSuite, run: EvalRun, *, tool: str = "generic") -> dict[str, Any]:
     """Return a compact run summary suitable for external experiment trackers."""
 
@@ -145,6 +346,25 @@ def eval_tool_summary(suite: EvalSuite, run: EvalRun, *, tool: str = "generic") 
         "run_fingerprint": run.fingerprint,
         "metrics": refmark_evidence_metrics(suite, run),
         "diagnostics": run.diagnostics,
+    }
+
+
+def _refmark_row_metadata(suite: EvalSuite, run: EvalRun, index: int) -> dict[str, Any]:
+    result = run.examples[index]
+    example = suite.examples[index]
+    return {
+        "gold_refs": result.gold_refs,
+        "retrieved_refs": result.retrieved_refs,
+        "context_refs": result.context_refs,
+        "hit_at_1": result.hit_at_1,
+        "hit_at_k": result.hit_at_k,
+        "gold_coverage": result.gold_coverage,
+        "region_precision": result.region_precision,
+        "query_style": result.query_style,
+        "gold_mode": result.gold_mode,
+        "source_hashes": dict(example.source_hashes),
+        "top_ref": result.top_ref,
+        "score_margin": result.score_margin,
     }
 
 
@@ -181,3 +401,14 @@ def _ensure_aligned(suite: EvalSuite, run: EvalRun) -> None:
 
 def _mean(values: Sequence[int | float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
+
+
+def _write_jsonl(path: str | Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    Path(path).write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+
+def _digest(value: Any) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    import hashlib
+
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
