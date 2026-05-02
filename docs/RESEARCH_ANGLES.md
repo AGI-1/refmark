@@ -118,6 +118,12 @@ summary, including vectorized lexical runs and MiniLM/BGE embedding baselines.
 Question: can small local models learn to route questions to corpus areas,
 articles, sections, or ref ranges?
 
+This is an independent research topic, not a separate product surface. The
+product already provides the required substrate: stable refs/ranges, manifests,
+eval suites, lifecycle checks, and comparable run artifacts. Centroid routers,
+small classifiers, bi-encoders, and browser navigators are consumers of that
+substrate.
+
 Research variants:
 
 - area classifier over coarse region clusters

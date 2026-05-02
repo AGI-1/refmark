@@ -61,7 +61,7 @@ Evidence:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Refmark CLI: inject, strip, highlight, and apply reference-marker edits."
+        description="Refmark CLI: map addressable regions, evaluate evidence recovery, and manage ref-based review workflows."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -252,6 +252,30 @@ def main():
     compare_runs_parser.add_argument("--min-best-hit-at-k", type=float, default=None, help="Fail when the best run hit@k is below this threshold.")
     compare_runs_parser.add_argument("--fail-on-regression", action="store_true", help="Exit nonzero when compatibility or threshold checks fail.")
     compare_runs_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    ci_parser = subparsers.add_parser(
+        "ci",
+        help="Run the default evidence-CI loop: map, build-index, eval-index, compare-index.",
+    )
+    ci_parser.add_argument("corpus", help="Input file or directory to map and index.")
+    ci_parser.add_argument("examples", help="JSONL rows with query and gold_refs fields.")
+    ci_parser.add_argument("--out-dir", default="runs/refmark_ci", help="Directory for generated CI artifacts.")
+    ci_parser.add_argument("--source", choices=["local", "openrouter"], default="local", help="Retrieval-view source for build-index.")
+    ci_parser.add_argument("--model", default="mistralai/mistral-nemo", help="OpenRouter model when --source=openrouter.")
+    ci_parser.add_argument("--endpoint", default=OPENROUTER_CHAT_URL)
+    ci_parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
+    ci_parser.add_argument("--extensions", default="txt,md,rst,html,htm,docx,pdf")
+    ci_parser.add_argument("--format", dest="marker_format", default="typed_bracket", help="Marker format for mapping/indexing.")
+    ci_parser.add_argument("--chunker", default="paragraph")
+    ci_parser.add_argument("--min-words", type=int, default=8)
+    ci_parser.add_argument("--questions-per-region", type=int, default=4)
+    ci_parser.add_argument("--keywords-per-region", type=int, default=8)
+    ci_parser.add_argument("--top-k", type=int, default=10)
+    ci_parser.add_argument("--strategies", default="flat,hierarchical,rerank")
+    ci_parser.add_argument("--min-hit-at-k", type=float, default=None, help="Eval threshold for the default eval-index run.")
+    ci_parser.add_argument("--min-best-hit-at-k", type=float, default=None, help="Compare-index threshold for the best built-in strategy.")
+    ci_parser.add_argument("--max-stale", type=int, default=0)
+    ci_parser.add_argument("--fail-on-regression", action="store_true")
 
     adapt_plan_parser = subparsers.add_parser(
         "adapt-plan",
@@ -506,6 +530,8 @@ def main():
         _handle_compare_index(args)
     elif args.command == "compare-runs":
         _handle_compare_runs(args)
+    elif args.command == "ci":
+        _handle_ci(args)
     elif args.command == "adapt-plan":
         _handle_adapt_plan(args)
     elif args.command == "feedback-diagnostics":
@@ -1001,6 +1027,124 @@ def _handle_compare_runs(args):
     if ci_status["status"] == "fail":
         print(json.dumps({"ci_status": ci_status}, indent=2), file=sys.stderr)
         sys.exit(3)
+
+
+def _handle_ci(args):
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = out_dir / "corpus.refmark.jsonl"
+    marked_dir = out_dir / "marked"
+    index = out_dir / "docs.index.json"
+    eval_report = out_dir / "eval.json"
+    smell_report = out_dir / "smells.json"
+    adaptation_plan = out_dir / "adaptation_plan.json"
+    compare_report = out_dir / "compare_index.json"
+
+    map_args = argparse.Namespace(
+        path=args.corpus,
+        output=str(manifest),
+        marked_dir=str(marked_dir),
+        config=None,
+        density=None,
+        marker_style=None,
+        marker_format=args.marker_format,
+        chunker=args.chunker,
+        min_words=args.min_words,
+        lines_per_chunk=None,
+        tokens_per_chunk=None,
+        ignore_title=False,
+        top_k=None,
+        threshold=None,
+        expand_before=None,
+        expand_after=None,
+        no_numeric_checks=False,
+    )
+    _handle_map(map_args)
+
+    build_args = argparse.Namespace(
+        corpus=args.corpus,
+        output=str(index),
+        source=args.source,
+        model=args.model,
+        endpoint=args.endpoint,
+        api_key_env=args.api_key_env,
+        extensions=args.extensions,
+        marker_format=args.marker_format,
+        chunker=args.chunker,
+        tokens_per_chunk=None,
+        lines_per_chunk=None,
+        min_words=args.min_words,
+        questions_per_region=args.questions_per_region,
+        keywords_per_region=args.keywords_per_region,
+        metadata_only=False,
+        limit=None,
+        exclude_glob=[],
+        concurrency=4,
+        sleep=0.0,
+        view_cache=str(out_dir / "view_cache.jsonl") if args.source == "openrouter" else None,
+    )
+    _handle_build_index(build_args)
+
+    eval_args = argparse.Namespace(
+        index=str(index),
+        examples=args.examples,
+        manifest=str(manifest),
+        top_k=args.top_k,
+        strategy="rerank",
+        doc_top_k=5,
+        candidate_k=30,
+        expand_before=0,
+        expand_after=0,
+        retriever_endpoint=None,
+        retriever_results=None,
+        retriever_timeout=30.0,
+        min_hit_at_k=args.min_hit_at_k,
+        min_hit_at_1=None,
+        min_mrr=None,
+        min_gold_coverage=None,
+        max_stale=args.max_stale,
+        fail_on_regression=args.fail_on_regression,
+        provenance_out=str(out_dir / "provenance.json"),
+        expect_provenance=None,
+        smell_report_output=str(smell_report),
+        adapt_plan_output=str(adaptation_plan),
+        output=str(eval_report),
+    )
+    _handle_eval_index(eval_args)
+
+    compare_args = argparse.Namespace(
+        index=str(index),
+        examples=args.examples,
+        manifest=str(manifest),
+        strategies=args.strategies,
+        top_k=args.top_k,
+        doc_top_k=5,
+        candidate_k=30,
+        expand_before=0,
+        expand_after=0,
+        min_best_hit_at_k=args.min_best_hit_at_k,
+        fail_on_regression=args.fail_on_regression,
+        output=str(compare_report),
+    )
+    _handle_compare_index(compare_args)
+
+    payload = {
+        "schema": "refmark.ci_summary.v1",
+        "corpus": args.corpus,
+        "examples": args.examples,
+        "out_dir": str(out_dir),
+        "artifacts": {
+            "manifest": str(manifest),
+            "marked_dir": str(marked_dir),
+            "index": str(index),
+            "eval": str(eval_report),
+            "provenance": str(out_dir / "provenance.json"),
+            "smells": str(smell_report),
+            "adaptation_plan": str(adaptation_plan),
+            "comparison": str(compare_report),
+        },
+    }
+    print(json.dumps(payload, indent=2))
 
 
 def _handle_adapt_plan(args):

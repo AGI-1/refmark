@@ -6,16 +6,16 @@ Turn your corpus into a regression test suite for retrieval.
 
 Refmark turns documents and code into a stable, addressable evidence space for
 AI systems. Once a corpus has refs like `policy:P13`, any retriever, reranker,
-embedder, query rewriter, context-expansion policy, citation generator, or small
-trained resolver can be evaluated by the same concrete question:
+embedder, query rewriter, context-expansion policy, citation generator, or
+corpus-local experiment can be evaluated by the same concrete question:
 
 > Did it recover the correct source region or range?
 
 That makes RAG evaluation feel more like CI than one-off answer judging. When
 the corpus changes, Refmark can identify which refs changed or disappeared so
-only affected evaluation and training examples need review.
+only affected evaluation rows or downstream evidence labels need review.
 
-Short version: model guesses become measurable.
+Short version: evidence recovery becomes measurable.
 
 Refmark is best read as **stable evidence references**: source regions that can
 be resolved, scored, highlighted, diffed, or marked stale. It does not replace
@@ -24,6 +24,8 @@ those systems a shared address space.
 
 Start with [Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md) for the
 canonical `map -> eval -> compare -> smells -> adapt -> manifest diff` loop.
+For a compact command/API inventory and non-goals, see
+[Product Surface](docs/PRODUCT_SURFACE.md).
 
 ## 30-Second Mental Model
 
@@ -98,18 +100,19 @@ flowchart LR
   churn control and anomaly checks.
 - **Production feedback loops:** aggregate real query/click/manual-selection
   events into reviewable alias, confusion, query-magnet, no-answer, and
-  coverage-gap candidates.
-- **Portable documentation search:** turn a folder of docs into Refmark regions,
-  enrich each region once with cheap LLM retrieval views, and ship a small
-  local BM25 JSON index that needs no runtime model.
+  coverage-gap candidates. This surface is useful but still young.
+- **Portable documentation search demos:** use the same refs and eval metrics
+  to build inspectable local search artifacts. These demos show what the
+  address space enables; they are not a separate core product surface.
 - **Human-in-the-loop audits:** render highlighted source regions so reviewers
   inspect what a model actually cited.
 - **Bounded code edits:** target stable same-file regions instead of line
-  numbers when applying multi-region model patches.
+  numbers when applying multi-region model patches. Treat this as a separate
+  code-editing workflow, not the core RAG claim.
 
 This does not guarantee that a model or retriever picked the right region. It
-guarantees a different and useful thing: refs exist, resolve back to source
-text, and can be audited and regression-tested. For review workflows, an
+provides a different and useful thing: refs exist, resolve back to source text,
+and can be audited and regression-tested. For review workflows, an
 irrelevant citation and a fabricated citation are not the same failure.
 Irrelevance is way easier to spot in review.
 
@@ -147,6 +150,11 @@ Research demos, benchmark outputs, and training experiments are kept separate
 from the core claim. They are useful because the same refs/ranges make their
 successes and failures measurable.
 
+Training, centroid routing, browser search, and new corpus-navigation methods
+are best treated as research or application layers. The product surface is the
+addressable corpus, evidence evaluation, lifecycle validation, data-smell
+diagnostics, integration adapters, and bounded ref-based citation/edit tools.
+
 ## Limitations
 
 - Refmark does not guarantee that a model picked the right evidence. It makes
@@ -161,26 +169,61 @@ successes and failures measurable.
 - Metrics are only as good as the region manifest and gold refs/ranges they are
   based on.
 
-## Quick Start
+## Quick Start: Evidence CI
 
 ```bash
-pip install -e .[dev,mcp,typescript,documents,train]
-python -m refmark.cli languages
+pip install -e .
 python -m refmark.cli smoke
-python -m refmark_train.verify_publish_artifact
-python -m refmark_train.smoke
-python examples/citation_qa/run_eval.py
-python examples/data_smells/run.py
-python examples/judge_free_rewards/run.py
-python examples/multidiff_demo/run.py
-python examples/pipeline_primitives/run.py
-python examples/coverage_alignment/run.py
-python -m refmark.cli build-index examples/portable_search_index/sample_corpus -o examples/portable_search_index/output/index_local.json
-python -m refmark.cli export-browser-index examples/portable_search_index/output/index_local.json -o examples/portable_search_index/output/index_browser.json
-pytest
+python examples/docs_navigation_pipeline/run.py
 ```
 
-To try the CLI on a real file without mutating the example source:
+That example writes a manifest, portable search index, browser payload,
+retrieval eval report, strategy comparison, data-smell report, adaptation plan,
+and sample query result under `examples/docs_navigation_pipeline/output/`.
+
+`map` can run in shadow mode: the source files do not need inline marker edits.
+The manifest is the address registry, mapping refs such as `security:P03` to a
+source path, text span, ordinal, and content hash for the current corpus
+revision. If you already have chunks in a vector DB or search service, keep
+using them and store the stable refs in chunk metadata.
+
+The equivalent product-shaped command loop is:
+
+```bash
+python -m refmark.cli ci docs/ eval_questions.jsonl \
+  --out-dir runs/refmark_ci \
+  --min-hit-at-k 0.80 \
+  --min-best-hit-at-k 0.80 \
+  --fail-on-regression
+```
+
+That is a convenience wrapper around the explicit steps:
+
+```bash
+python -m refmark.cli map docs/ -o .refmark/corpus.refmark.jsonl --marked-dir .refmark/marked
+python -m refmark.cli build-index docs/ -o runs/docs.index.json --source local
+python -m refmark.cli eval-index runs/docs.index.json eval_questions.jsonl \
+  --manifest .refmark/corpus.refmark.jsonl \
+  --smell-report-output runs/smells.json \
+  --adapt-plan-output runs/adaptation_plan.json \
+  --min-hit-at-k 0.80 \
+  --max-stale 0 \
+  --fail-on-regression \
+  -o runs/eval.json
+python -m refmark.cli compare-index runs/docs.index.json eval_questions.jsonl \
+  --manifest .refmark/corpus.refmark.jsonl \
+  --strategies flat,hierarchical,rerank \
+  --fail-on-regression \
+  -o runs/compare_index.json
+```
+
+Start with [Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md) for the
+full command path and [Docs Index](docs/README.md) for the rest of the public
+surface.
+
+## Other Fast Checks
+
+To try the marker CLI on a real file without mutating the example source:
 
 ```bash
 python -m refmark.cli inject examples/multidiff_demo/source.py --output marked.py
@@ -210,15 +253,56 @@ python -m refmark.cli feedback-diagnostics feedback.jsonl \
   -o feedback_report.json
 ```
 
+An evidence run can produce review artifacts like:
+
+```json
+{
+  "type": "confusion_pair",
+  "gold_ref": "security:P03",
+  "observed_ref": "security:P08",
+  "suggested_action": "review disambiguating metadata or hard-negative coverage"
+}
+```
+
+When a corpus changes, manifest diff can flag rows that need review:
+
+```json
+{
+  "changed_refs": ["security:P03"],
+  "affected_examples": [{"query": "How often are tokens rotated?", "gold_refs": ["security:P03"]}]
+}
+```
+
 Citation ranges and edit ranges intentionally differ. Citation ranges such as
 `policy:P03-P05` are inclusive evidence ranges; `apply_ref_diff` boundary
 ranges stop before `end_ref`. See [Range And Citation Semantics](docs/RANGE_AND_CITATION_SEMANTICS.md).
+
+For full local verification, install the optional extras and run the examples
+that match the surface you are changing:
+
+```bash
+pip install -e .[dev,mcp,typescript,documents,train]
+python -m refmark.cli languages
+python examples/citation_qa/run_eval.py
+python examples/data_smells/run.py
+python examples/library_integration_demo/run.py
+python examples/eval_tool_integrations_demo/run.py
+pytest
+```
+
+The training checks are intentionally separate because `refmark_train` is a
+research/prototype surface:
+
+```bash
+python -m refmark_train.verify_publish_artifact
+python -m refmark_train.smoke
+```
 
 ## Evidence Evaluation API
 
 `EvalSuite` is the attach point for existing RAG systems. It does not care
 whether hits came from BM25, embeddings, a vector database, a reranker, query
-rewriting, or a small trained resolver. The retriever only has to return refs
+rewriting, or a corpus-local experiment. The retriever only has to return refs
 or hits that contain refs.
 
 ```python
@@ -451,7 +535,7 @@ query-magnet roles, range/context tuning, and confidence gating. That makes
 retrieval quality inspectable below answer prose: you can see whether a
 pipeline found the evidence required to answer and what should be reviewed next.
 
-To build a tiny searchable documentation index:
+To build a small searchable documentation index for an evidence-eval demo:
 
 ```bash
 python -m refmark.cli build-index docs -o docs.refmark-index.json --source openrouter --model mistralai/mistral-nemo
@@ -465,8 +549,8 @@ python -m refmark.cli export-browser-index docs.refmark-index.json -o docs.refma
 
 The build step can spend cheap LLM tokens once to create summaries, likely user
 questions, and keywords per region. The search step is local BM25 over the JSON
-index, so it can be embedded into documentation tooling without a vector
-database or runtime model.
+index. Treat this as a concrete demo of the evidence substrate and a useful
+baseline artifact, not as a claim that Refmark is itself a search engine.
 
 The eval step makes the artifact self-checking: reports include input hashes,
 retrieval settings hashes, stale-ref validation, hard-ref/confusion heatmaps,
@@ -607,14 +691,19 @@ generation budget where the corpus actually changed.
 
 The retained `refmark_train` prototype explores this path. It intentionally
 overfits small models to a fixed addressable corpus, treating narrow local
-specialization as a feature rather than a bug. Current evidence supports this
-as a promising corpus-local navigation experiment, not yet as a broad claim
-about general model training.
+specialization as a feature rather than a bug. This belongs in research notes
+and articles: it uses the Refmark substrate, but it is not a special product
+surface beyond the existing mapping/eval/lifecycle tools.
 
 ## Current Evidence
 
 The current evidence is strongest for:
 
+- corpus CI for retrieval: `query -> gold refs/ranges`, strategy comparison,
+  stale-label detection, data-smell reports, and review-required adaptation
+  plans
+- lifecycle validation for maintained evidence labels when documentation
+  revisions change
 - deterministic locate-only citation evaluation and human-auditable source
   review
 - stable same-file anchored edits for bounded Python and TypeScript workflows
@@ -645,28 +734,33 @@ the hypothesis is already solved.
 
 ## Recommended Reading Order
 
-- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- [docs/README.md](docs/README.md)
+- [docs/QUICKSTART_EVIDENCE_CI.md](docs/QUICKSTART_EVIDENCE_CI.md)
+- [docs/EVIDENCE_SUMMARY.md](docs/EVIDENCE_SUMMARY.md)
+- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
 - [examples/README.md](examples/README.md)
 - [docs/MCP_USAGE.md](docs/MCP_USAGE.md)
-- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
-- [docs/PRODUCTIZATION_TASKS.md](docs/PRODUCTIZATION_TASKS.md)
-- [docs/CURRENT_STATE_REVIEW.md](docs/CURRENT_STATE_REVIEW.md)
-- [docs/CURRENT_BENCHMARK_SNAPSHOT.md](docs/CURRENT_BENCHMARK_SNAPSHOT.md)
-- [docs/TRAINING_PROTOTYPE.md](docs/TRAINING_PROTOTYPE.md)
+- [docs/RESEARCH_ANGLES.md](docs/RESEARCH_ANGLES.md)
 
 ## Reproducibility Notes
 
-The historical broad benchmark harness is not part of this PoC artifact. The
-figures in the benchmark snapshot are retained as research context, while the
-publicly runnable checks are:
+The historical broad benchmark harness is not the public claim. The figures in
+the benchmark snapshot are retained as research context, while the primary
+public checks are:
 
 - `python -m refmark.cli smoke`
-- `python -m refmark_train.smoke`
+- `python examples/docs_navigation_pipeline/run.py`
+- `python examples/library_integration_demo/run.py`
 - `python examples/citation_qa/run_eval.py`
 - `python examples/data_smells/run.py`
-- `python examples/judge_free_rewards/run.py`
 - `python examples/pipeline_primitives/run.py`
 - `pytest`
+
+Training checks are still available, but they verify the research/prototype
+surface:
+
+- `python -m refmark_train.smoke`
+- `python -m refmark_train.verify_publish_artifact`
 
 The training prototype includes derived datasets and run summaries. Raw and
 normalized source documents are intentionally not redistributed; use

@@ -14,6 +14,18 @@ reranker, query rewriter, citation model, and reviewer the same concrete target:
 Did this run recover the correct source ref or range?
 ```
 
+For the default local path, one command creates the standard artifacts:
+
+```bash
+python -m refmark.cli ci docs/ eval_questions.jsonl \
+  --out-dir runs/refmark_ci \
+  --min-hit-at-k 0.80 \
+  --min-best-hit-at-k 0.80 \
+  --fail-on-regression
+```
+
+The sections below show the same workflow step by step.
+
 ## 1. Map A Corpus
 
 Create a shadow manifest. The source files do not need to be modified.
@@ -27,6 +39,10 @@ python -m refmark.cli map docs/ \
 The manifest maps stable refs such as `policy:P03` to source text, hashes,
 paths, and ordinals. Treat it like a generated registry for the current corpus
 revision.
+
+If your production retriever already chunks documents, attach the relevant
+stable refs to each chunk as metadata. Refmark does not require replacing the
+chunker, embedding model, vector database, or search service.
 
 ## 2. Create Or Import Eval Rows
 
@@ -144,6 +160,28 @@ retrievers, hosted services, or previous CI artifacts.
 such as shadow metadata/doc2query additions, stale-label refresh, range/context
 tuning, confidence gating, and query-magnet role assignment.
 
+Example smell row:
+
+```json
+{
+  "type": "hard_ref",
+  "ref": "security:P03",
+  "severity": "medium",
+  "evidence": {"miss_count": 4, "query_styles": ["concern", "direct"]}
+}
+```
+
+Example adaptation action:
+
+```json
+{
+  "adaptation_type": "shadow_metadata",
+  "target_refs": ["security:P03"],
+  "review_required": true,
+  "rationale": "Gold ref is repeatedly missed; review aliases or doc2query metadata."
+}
+```
+
 ## 7. Check Corpus Changes
 
 When the corpus changes, map it again:
@@ -187,6 +225,37 @@ python examples/docs_navigation_pipeline/run.py
 It writes a manifest, TOC map, portable index, browser payload, eval reports,
 `compare_index.json`, `smells.json`, `adaptation_plan.json`, and a sample query
 result under `examples/docs_navigation_pipeline/output/`.
+
+## CI Shape
+
+For GitHub Actions, keep this as a project-specific workflow skeleton rather
+than a universal generated file:
+
+```yaml
+name: refmark-evidence-ci
+
+on: [pull_request]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - run: |
+          mkdir -p runs
+          python -m refmark.cli map docs/ -o runs/corpus.refmark.jsonl
+          python -m refmark.cli build-index docs/ -o runs/docs.index.json --source local
+          python -m refmark.cli eval-index runs/docs.index.json eval_questions.jsonl \
+            --manifest runs/corpus.refmark.jsonl \
+            --min-hit-at-k 0.80 \
+            --max-stale 0 \
+            --fail-on-regression \
+            -o runs/eval.json
+```
 
 ## What This Proves
 

@@ -1,9 +1,10 @@
 # Refmark Project Roadmap
 
 This note keeps the product and research tracks separated. Refmark should be
-published as a stable evidence-addressing toolkit first; training, browser
-search, and agentic repair loops are important applications, but they should not
-be the first claim.
+published as a stable evidence-addressing toolkit first. Training, browser
+search, centroid routing, corpus-local navigation, and agentic repair loops are
+important applications of the substrate, but they are not separate product
+surfaces by themselves.
 
 ## Core Thesis
 
@@ -44,7 +45,7 @@ Strong, implemented surfaces:
   tooling;
 - bounded same-file multi-region edit tooling and MCP server.
 
-Useful demos, but not headline claims:
+Useful demos/research consumers, but not headline product surfaces:
 
 - portable browser/documentation search;
 - FastAPI heatmap and question-improvement workbench;
@@ -139,9 +140,11 @@ Product directions:
 - agent workflow where discovery, diagnosis, adaptation, and mini-eval are
   explicit tools;
 - richer corpus clustering and overview maps for flat wiki-style corpora;
-- optional build-time teacher models that enrich shadow metadata without
-  requiring runtime model infrastructure;
 - maintained adapters for popular RAG/eval/observability tools.
+
+Research outputs may later become examples or optional adapters, but they
+should not become product promises unless they expose a generally reusable
+piece of the mapping/eval/lifecycle substrate.
 
 Long-term success means Refmark becomes a lifecycle substrate: the shared
 address space that lets corpora, retrievers, LLM citations, training examples,

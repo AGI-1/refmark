@@ -274,6 +274,52 @@ def test_pipeline_cli_expand_same_parent(tmp_path):
     assert [item["region_id"] for item in expanded_payload] == ["P01", "P02", "P03"]
 
 
+def test_pipeline_cli_ci_runs_default_evidence_loop(tmp_path):
+    corpus = tmp_path / "docs"
+    corpus.mkdir()
+    (corpus / "security.md").write_text(
+        "# Security\n\nToken rotation is required every 90 days for production administrator credentials.\n",
+        encoding="utf-8",
+    )
+    examples = tmp_path / "eval_questions.jsonl"
+    examples.write_text(
+        json.dumps({"query": "How often should production tokens rotate?", "gold_refs": ["security:P02"]}) + "\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "runs"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "ci",
+            str(corpus),
+            str(examples),
+            "--out-dir",
+            str(out_dir),
+            "--min-hit-at-k",
+            "1.0",
+            "--min-best-hit-at-k",
+            "1.0",
+            "--fail-on-regression",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    summary = json.loads(result.stdout)
+    assert summary["schema"] == "refmark.ci_summary.v1"
+    assert (out_dir / "corpus.refmark.jsonl").exists()
+    assert (out_dir / "docs.index.json").exists()
+    assert (out_dir / "eval.json").exists()
+    assert (out_dir / "smells.json").exists()
+    assert (out_dir / "adaptation_plan.json").exists()
+    compare = json.loads((out_dir / "compare_index.json").read_text(encoding="utf-8"))
+    assert compare["best_by_hit_at_k"]["metrics"]["hit_at_k"] == 1.0
+
+
 def test_pipeline_cli_expand_rejects_invalid_citation_refs(tmp_path):
     source = tmp_path / "source.txt"
     manifest = tmp_path / "manifest.jsonl"

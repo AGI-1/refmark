@@ -12,12 +12,10 @@ For the evidence behind this scope, see [Evidence Summary](EVIDENCE_SUMMARY.md).
 3. Data-smell reports and conservative adaptation plans for review-required
    retrieval improvement loops
 4. Highlighted source review for cited anchor regions
-5. Portable local documentation search indexes as an evidence-eval demo/product
-   wedge
+5. Portable local documentation search indexes as evidence-eval demos and
+   baseline artifacts
 6. Stable same-file multi-region edits for Python and TypeScript via
    `apply_ref_diff`
-7. Corpus-local anchored QA dataset generation and training prototype through
-   `refmark_train`, framed as exploratory
 
 ## Supported User Journeys
 
@@ -97,9 +95,9 @@ Additional evidence that would help:
 - screenshots or tiny examples in docs
 - one notebook or HTML example for QA review
 
-### 4. Pipeline For Anchored QA Bench Creation From Corpus
+### 4. Research Context: Anchored QA Bench Creation From Corpus
 
-Supported today, but should be presented as a prototype pipeline rather than a finalized product:
+Useful as research context, but intentionally outside the product surface:
 
 - ingest local or prepared corpora
 - create anchored datasets
@@ -111,13 +109,13 @@ Primary files in the broader research workspace:
 - `refmark_train/README.md`
 - `refmark_train/cli.py`
 
-Public verification command:
+Research verification command:
 
 ```bash
 python -m refmark_train.smoke
 ```
 
-Additional evidence that would strengthen this path:
+Additional evidence that would strengthen this research path:
 
 - one end-to-end corpus refresh demo
 - one reviewed exported QA set outside the synthetic path
@@ -130,6 +128,7 @@ Additional evidence that would strengthen this path:
 - broad SWE-bench superiority
 - small-model citation accuracy improvement as a general result
 - training-prototype transfer advantages across corpora
+- browser/local navigation as a polished standalone product
 
 ## Tooling Resilience Expectations
 
@@ -139,7 +138,7 @@ For the current published scope, the tools are resilient enough if we stay insid
 - same-file edits only for `apply_ref_diff`
 - locate-only citation evaluation rather than free-form answer grading
 - highlighted review over returned refs, not arbitrary semantic span inference
-- `refmark_train` framed as exploratory and corpus-local
+- `refmark_train` framed as research that consumes the mapping/eval substrate
 
 ## Recommended Publish Position
 
@@ -148,4 +147,4 @@ Publish `refmark` as:
 - a research toolkit with a narrow stable surface
 - strong on deterministic locate-only citation evaluation and HiL review
 - promising but still experimental on coding-agent multidiff
-- exploratory on trainable corpus-local anchor prediction
+- clear that trainable corpus-local navigation is a separate research track

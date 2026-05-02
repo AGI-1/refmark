@@ -108,28 +108,30 @@ Refmark regions.
 
 ## Portable Search Index
 
-`portable_search_index` demonstrates the product-shaped retrieval flow:
+`portable_search_index` demonstrates a retrieval artifact built on the
+evidence-eval substrate:
 
 1. map a folder of docs into Refmark regions
 2. enrich each region with local or OpenRouter-generated retrieval metadata
 3. write a single portable JSON index
 4. search locally with BM25 and return stable region ids plus optional neighbor context
 
-This is the "corpus plus cheap LLM becomes searchable corpus" path. The build
-step can use a cheap model once; query-time search needs no API, embeddings,
-GPU, vector database, or server.
+This is the "corpus plus cheap LLM becomes searchable corpus" demo path. The
+build step can use a cheap model once; query-time search needs no API,
+embeddings, GPU, vector database, or server. It is useful as a baseline and
+application example, not as a separate product promise.
 
 ## Documentation Navigation Pipeline
 
-`docs_navigation_pipeline` is the frozen small end-to-end recipe for software
-documentation navigation:
+`docs_navigation_pipeline` is the frozen small end-to-end recipe for evidence
+CI over software documentation:
 
 1. map Markdown docs into a region manifest
 2. build a local portable index
 3. export a browser-search payload
 4. evaluate query -> gold-ref examples against the index
 5. write a data-smell report and adaptation plan for the evaluated run
-6. run a free-text navigation query that returns stable refs and snippets
+6. run a free-text query that returns stable refs and snippets
 
 It intentionally avoids vector databases and runtime model calls. Larger
 comparisons against embeddings or hosted retrievers can still be scored through
