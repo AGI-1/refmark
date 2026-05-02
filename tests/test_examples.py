@@ -61,6 +61,15 @@ def test_data_smells_example_runs():
     assert wrong["wrong_location_rate"] == 1.0
     assert sloppy["wrong_location_rate"] == 0.0
     assert sloppy["exact_match"] == 0.0
+    retrieval_payload = json.loads((PUBLISH_ROOT / "examples" / "data_smells" / "output" / "retrieval_smells_report.json").read_text())
+    assert retrieval_payload["schema"] == "refmark.data_smells.v1"
+    assert retrieval_payload["summary"]["by_type"]["stale_label"] == 1
+    assert retrieval_payload["summary"]["by_type"]["hard_ref"] >= 1
+    assert retrieval_payload["summary"]["by_type"]["query_magnet"] == 1
+    plan = json.loads((PUBLISH_ROOT / "examples" / "data_smells" / "output" / "adaptation_plan.json").read_text())
+    assert plan["schema"] == "refmark.adaptation_plan.v1"
+    assert plan["summary"]["by_adaptation_type"]["retrieval_metadata"] >= 1
+    assert any(action["source_smell"] == "query_magnet" for action in plan["actions"])
 
 
 def test_fastapi_review_input_includes_metadata_and_smells():
@@ -219,6 +228,85 @@ def test_eval_tool_integrations_demo_runs():
     assert trace_row["attributes"]["refmark.corpus_fingerprint"]
 
 
+def test_eval_tool_real_sdk_smoke_degrades_without_optional_sdks():
+    result = subprocess.run(
+        [sys.executable, "examples/eval_tool_integrations_demo/real_sdk_smoke.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads((PUBLISH_ROOT / "examples" / "eval_tool_integrations_demo" / "output" / "real_sdk_smoke.json").read_text())
+    assert payload["schema"] == "refmark.real_sdk_smoke.v1"
+    assert set(payload["tools"]) == {"ragas", "deepeval", "langfuse", "phoenix_openinference"}
+
+
+def test_ragas_refmark_mutation_demo_runs():
+    result = subprocess.run(
+        [sys.executable, "examples/ragas_refmark_mutation_demo/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_dir = PUBLISH_ROOT / "examples" / "ragas_refmark_mutation_demo" / "output"
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    plain_row = json.loads((output_dir / "ragas_plain_rows.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    refmark_row = json.loads((output_dir / "ragas_with_refmark_rows.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert summary["ragas_without_refmark"]["fields"] == ["reference", "response", "retrieved_contexts", "user_input"]
+    assert summary["ragas_with_refmark"]["stale_example_count"] == 2
+    assert summary["ragas_with_refmark"]["metrics"]["hit_at_k"] == 1.0
+    assert "refmark" not in plain_row
+    assert refmark_row["refmark"]["source_hashes"]
+
+
+def test_lifecycle_tool_integrations_demo_runs():
+    result = subprocess.run(
+        [sys.executable, "examples/lifecycle_tool_integrations_demo/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_dir = PUBLISH_ROOT / "examples" / "lifecycle_tool_integrations_demo" / "output"
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    first_tool_row = json.loads((output_dir / "lifecycle_tool_rows.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert summary["rows"] == 15
+    assert summary["corpora"] == 5
+    assert summary["aggregate"]["avg_naive_silent_wrong_rate"] > 0.25
+    assert first_tool_row["schema"] == "refmark.lifecycle_tool_row.v1"
+    assert first_tool_row["metrics"]["naive_silent_wrong_rate"] > 0.0
+
+
+def test_library_integration_demo_runs():
+    result = subprocess.run(
+        [sys.executable, "examples/library_integration_demo/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_dir = PUBLISH_ROOT / "examples" / "library_integration_demo" / "output"
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    artifact = json.loads((output_dir / "run_artifact.json").read_text(encoding="utf-8"))
+    smells = json.loads((output_dir / "smells.json").read_text(encoding="utf-8"))
+    plan = json.loads((output_dir / "adaptation_plan.json").read_text(encoding="utf-8"))
+    assert summary["schema"] == "refmark.library_integration_demo.v1"
+    assert summary["hit_at_k"] == 1.0
+    assert summary["hit_at_1"] == 0.5
+    assert artifact["schema"] == "refmark.eval_run_artifact.v1"
+    assert smells["schema"] == "refmark.data_smells.v1"
+    assert plan["schema"] == "refmark.adaptation_plan.v1"
+
+
 def test_lifecycle_ci_demo_runs():
     result = subprocess.run(
         [sys.executable, "examples/lifecycle_ci_demo/run.py"],
@@ -232,3 +320,28 @@ def test_lifecycle_ci_demo_runs():
     payload = json.loads((PUBLISH_ROOT / "examples" / "lifecycle_ci_demo" / "output" / "lifecycle_report.json").read_text())
     assert payload["stale_example_count"] == 1
     assert payload["status"] == "ok"
+
+
+def test_docs_navigation_pipeline_writes_smells_and_adaptation_plan():
+    result = subprocess.run(
+        [sys.executable, "examples/docs_navigation_pipeline/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_dir = PUBLISH_ROOT / "examples" / "docs_navigation_pipeline" / "output"
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    smells = json.loads((output_dir / "smells.json").read_text(encoding="utf-8"))
+    plan = json.loads((output_dir / "adaptation_plan.json").read_text(encoding="utf-8"))
+    comparison = json.loads((output_dir / "compare_index.json").read_text(encoding="utf-8"))
+    assert summary["schema"] == "refmark.docs_navigation_example.v1"
+    assert summary["reports"]["rerank"]["hit_at_k"] == 1.0
+    assert summary["best_strategy"]["metrics"]["hit_at_k"] == 1.0
+    assert smells["schema"] == "refmark.data_smells.v1"
+    assert plan["schema"] == "refmark.adaptation_plan.v1"
+    assert comparison["schema"] == "refmark.compare_index_report.v1"
+    assert set(comparison["runs"]) == {"flat", "hierarchical", "rerank"}
+    assert plan["summary"]["source_run_fingerprint"] == smells["summary"]["run_fingerprint"]

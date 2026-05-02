@@ -210,8 +210,9 @@ training. It gives those choices a shared testable target.
 
 ## What Was Tested
 
-The adapter layer is currently tested as dependency-free handoff data, not as
-live SDK calls into each vendor package. The tests verify that:
+The core adapter layer is tested as dependency-free handoff data. That keeps
+Refmark lightweight and prevents Ragas, DeepEval, Phoenix, Langfuse, or MLflow
+from becoming required package dependencies. The normal tests verify that:
 
 - resolved source text is present for answer-level evaluators;
 - gold/retrieved/context refs remain attached;
@@ -219,9 +220,111 @@ live SDK calls into each vendor package. The tests verify that:
 - trace rows contain stable fingerprints and stale-state metadata;
 - lifecycle rows preserve corpus revision metrics.
 
-This is deliberate. It keeps Refmark's package surface lightweight while making
-the integration boundary explicit. Thin optional SDK-specific shims can be added
-later without changing the evidence metrics or row schemas.
+There is also an optional real-SDK smoke test:
+
+```bash
+python examples/eval_tool_integrations_demo/real_sdk_smoke.py
+```
+
+With no optional packages installed, the script reports `not_installed` for each
+tool. With the current SDK packages installed in an isolated environment, this
+was checked against:
+
+| Tool | SDK object/path checked | Result |
+| --- | --- | --- |
+| Ragas 0.4.3 | `EvaluationDataset` with `SingleTurnSample` rows | native construction ok; refs and source hashes preserved |
+| DeepEval 3.9.9 | `LLMTestCase` with Refmark metadata | native construction ok; refs and source hashes preserved |
+| Langfuse 4.5.1 | `Langfuse` retriever observation metadata | local construction ok; refs and fingerprints preserved |
+| Phoenix/OpenInference | in-memory OpenTelemetry retriever span | span construction ok; refs and fingerprints preserved |
+
+Hosted ingestion is intentionally not part of the default check. Langfuse needs
+caller-owned `LANGFUSE_*` credentials and Phoenix needs a running server or OTLP
+endpoint. Ragas and DeepEval answer-quality metrics may also need model/judge
+configuration. Refmark's role in these integrations is the evidence layer: refs,
+resolved contexts, source hashes, fingerprints, stale-state metadata, and
+evidence metrics.
+
+The full `arize-phoenix` server package was not made a project dependency. A
+one-shot install attempt pulled a broad server stack and hit pip resolver depth;
+the lighter Phoenix/OpenInference client path was enough to validate the span
+metadata shape locally.
+
+## Mutation Comparison: Ragas Alone vs Ragas + Refmark
+
+The most useful comparison is not "Ragas versus Refmark." Ragas evaluates
+answer/context quality. Refmark adds evidence identity and corpus lifecycle
+checks before those answer/context rows are trusted.
+
+`examples/ragas_refmark_mutation_demo/run.py` demonstrates the failure mode:
+
+1. Create eval rows on `policy-v1` with `query -> gold_refs` and source hashes.
+2. Mutate the corpus into `policy-v2` while keeping the same visible ref ids.
+3. Export plain Ragas-style rows from the current corpus.
+4. Export Refmark-enriched Ragas-style rows from the same run.
+
+In that demo, retrieval against the mutated corpus still has perfect evidence
+hit metrics because the current strings and current refs are self-consistent:
+
+```json
+{
+  "hit_at_k": 1.0,
+  "gold_coverage": 1.0
+}
+```
+
+But Refmark also reports:
+
+```json
+{
+  "stale_example_count": 2,
+  "changed_refs": ["policy:P01", "policy:P02"]
+}
+```
+
+That is the practical integration point. Ragas can still score generated
+answers and retrieved context text, while Refmark tells the lifecycle system
+that the maintained eval labels were created against old source text and need
+review or refresh.
+
+## Real-Corpus Lifecycle Rows
+
+`examples/lifecycle_tool_integrations_demo/run.py` consumes compact summary rows
+from five Git-backed documentation revision runs: FastAPI, Django, Flask, HTTPX,
+and Kubernetes. It does not ship raw cloned corpora; it ships only the compact
+metrics needed to demonstrate the integration surface.
+
+The demo exports `lifecycle_tool_rows.jsonl`, where each row can be logged to an
+experiment tracker or observability system beside normal Ragas/DeepEval answer
+metrics:
+
+```json
+{
+  "schema": "refmark.lifecycle_tool_row.v1",
+  "name": "lifecycle:0.100.0->0.115.0",
+  "metrics": {
+    "refmark_auto_rate": 0.0655,
+    "refmark_review_rate": 0.3401,
+    "refmark_stale_rate": 0.5944,
+    "naive_silent_wrong_rate": 0.6147
+  }
+}
+```
+
+The current compact fixture covers 15 revision comparisons over 5 documentation
+corpora. In those rows, the average naive silent-wrong rate is about `30.1%`.
+That number is not a universal claim about all chunking systems. It is evidence
+for the lifecycle failure mode: persisted evidence labels can keep resolving
+while pointing to different content.
+
+The operational recipe is:
+
+1. Run Ragas or DeepEval on current answer/context rows.
+2. Run Refmark stale/lifecycle validation on the same eval suite.
+3. Log both surfaces to the same tracker.
+4. Gate or annotate answer metrics when stale/review rates exceed thresholds.
+
+This makes Refmark additive: existing evaluators keep their answer-quality role,
+while Refmark supplies evidence identity and corpus-change safety.
 
 ## Caveats
 

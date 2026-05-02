@@ -89,6 +89,19 @@ Use these rules for research notes and CI:
 5. Report candidate recall separately from reranker ordering quality.
 6. Preserve stale-ref checks when a corpus revision changes.
 
+For saved reports, use `compare-runs`:
+
+```bash
+python -m refmark.cli compare-runs runs/eval_*.json \
+  --baseline eval_bm25.json \
+  -o runs/compare_runs.json
+```
+
+The command accepts `refmark.eval_index_report.v1` and
+`refmark.eval_run_artifact.v1` JSON. It checks whether corpus and eval-suite
+fingerprints match, reports per-run metrics and deltas from the baseline, and
+can fail CI thresholds without rerunning retrieval.
+
 This is the main reason Refmark matters in the training experiments: the refs
 are not just labels. They are the shared coordinate system that makes retrieval,
 adaptation, model training, and regression checks inspectable in the same terms.

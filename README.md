@@ -22,6 +22,9 @@ be resolved, scored, highlighted, diffed, or marked stale. It does not replace
 your retriever, vector database, judge model, or answer evaluator. It gives
 those systems a shared address space.
 
+Start with [Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md) for the
+canonical `map -> eval -> compare -> smells -> adapt -> manifest diff` loop.
+
 ## 30-Second Mental Model
 
 Given a document with addressable regions, a pipeline predicts which refs or
@@ -306,6 +309,8 @@ metrics = refmark_evidence_metrics(suite, runs["hybrid"])
 ```
 
 See [Eval Tool Integrations](docs/EVAL_TOOL_INTEGRATIONS.md).
+For the shortest command path, see
+[Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md).
 
 To use the CLI as a CI gate, keep the search index as the retriever artifact and
 optionally provide the current manifest as the lifecycle/staleness artifact:
@@ -314,11 +319,41 @@ optionally provide the current manifest as the lifecycle/staleness artifact:
 python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
   --manifest .refmark/policy_manifest.jsonl \
   --top-k 10 \
+  --smell-report-output runs/smells.json \
+  --adapt-plan-output runs/adaptation_plan.json \
   --min-hit-at-k 0.80 \
   --max-stale 0 \
   --fail-on-regression \
   -o runs/eval.json
 ```
+
+To compare built-in portable-index strategies on the same corpus/eval suite:
+
+```bash
+python -m refmark.cli compare-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest .refmark/policy_manifest.jsonl \
+  --strategies flat,hierarchical,rerank \
+  --min-best-hit-at-k 0.80 \
+  --fail-on-regression \
+  -o runs/compare_index.json
+```
+
+The report keeps one corpus fingerprint and eval-suite fingerprint, then emits
+per-strategy metrics, smell summaries, run artifacts, and the best strategy by
+hit@k.
+
+To compare saved reports from external retrievers or separate CI jobs:
+
+```bash
+python -m refmark.cli compare-runs runs/eval_bm25.json runs/eval_hybrid.json \
+  --baseline eval_bm25.json \
+  -o runs/compare_runs.json
+```
+
+For the smallest Python integration, see
+`examples/library_integration_demo/run.py`. It wraps an ordinary retriever
+callback with `EvalSuite.evaluate(...)`, then writes evidence metrics, a smell
+report, an adaptation plan, and a comparable run artifact.
 
 To evaluate evidence-label lifecycle across Git documentation revisions:
 
@@ -355,6 +390,20 @@ python -m refmark.cli lifecycle-validate-labels \
 exceeded. `stale_examples` are eval rows whose stored evidence hashes changed
 or disappeared; `changed_refs` and `removed_refs` come from the manifest diff
 itself and can be gated even before a full retrieval run.
+
+If you only need the address-space diff, compare two manifests directly:
+
+```bash
+python -m refmark.cli manifest-diff \
+  .refmark/policy_manifest.rev-a.jsonl \
+  .refmark/policy_manifest.rev-b.jsonl \
+  --examples eval_questions.rev-a.jsonl \
+  --max-stale 0 \
+  --output runs/manifest_diff.json
+```
+
+This produces `refmark.manifest_diff.v1`: added/removed/changed refs, corpus
+fingerprints, and optional eval rows affected by the changed address space.
 
 To score an existing retrieval service instead of the built-in BM25 index, pass
 an endpoint that accepts `{"query": "...", "top_k": 10}` and returns either
@@ -396,8 +445,11 @@ Retriever outputs can be plain stable refs, dictionaries, or small objects:
 
 The report includes exact hits, range/context coverage, precision, score-margin
 diagnostics, hard-ref heatmaps, wrong-top confusions, stale examples, and
-adaptation hints. That makes retrieval quality inspectable below answer prose:
-you can see whether a pipeline found the evidence required to answer.
+data-smell reports. `adapt-plan` turns those smells into review-required
+actions such as stale-label refresh, shadow metadata, confusion mapping,
+query-magnet roles, range/context tuning, and confidence gating. That makes
+retrieval quality inspectable below answer prose: you can see whether a
+pipeline found the evidence required to answer and what should be reviewed next.
 
 To build a tiny searchable documentation index:
 
@@ -426,6 +478,12 @@ For the artifact contract behind reproducible comparisons, see
 [Evidence Eval Artifacts](docs/EVIDENCE_EVAL_ARTIFACTS.md). For research
 directions that should stay distinct from the core product claim, see
 [Refmark Research Angles](docs/RESEARCH_ANGLES.md).
+For the minimal evidence-CI command path, see
+[Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md).
+For the next-term/mid-term/long-term project shape, see
+[Project Roadmap](docs/PROJECT_ROADMAP.md).
+For a conservative summary of what the current artifacts support, see
+[Evidence Summary](docs/EVIDENCE_SUMMARY.md).
 
 Recent example work adds the next visible layer of that loop: an evidence
 heatmap/workbench for a FastAPI documentation corpus. It groups regions by the

@@ -156,6 +156,71 @@ def test_lifecycle_validate_labels_cli_reports_stale_examples(tmp_path):
     assert payload["revision_diff"]["changed_refs"] == ["policy:P01"]
 
 
+def test_manifest_diff_cli_reports_revision_churn_and_affected_examples(tmp_path):
+    previous_manifest = tmp_path / "previous.jsonl"
+    current_manifest = tmp_path / "current.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    report = tmp_path / "diff.json"
+    previous = [
+        RegionRecord("policy", "P01", "Refunds last 30 days.", 1, 1, 1, "h-old"),
+        RegionRecord("policy", "P02", "Shipping is tracked.", 2, 2, 2, "h-ship"),
+    ]
+    current = [
+        RegionRecord("policy", "P01", "Refunds last 45 days.", 1, 1, 1, "h-new"),
+        RegionRecord("policy", "P03", "Support replies by email.", 3, 3, 3, "h-support"),
+    ]
+    write_manifest(previous, previous_manifest)
+    write_manifest(current, current_manifest)
+    examples.write_text(
+        "\n".join(
+            [
+                json.dumps({"query": "How long do refunds last?", "gold_refs": ["policy:P01"]}),
+                json.dumps({"query": "How is shipping tracked?", "gold_refs": ["policy:P02"]}),
+                json.dumps({"query": "How do I contact support?", "gold_refs": ["policy:P03"]}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "manifest-diff",
+            str(previous_manifest),
+            str(current_manifest),
+            "--examples",
+            str(examples),
+            "--previous-revision",
+            "rev-a",
+            "--current-revision",
+            "rev-b",
+            "--max-stale",
+            "2",
+            "--output",
+            str(report),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert result.returncode == 0, result.stderr
+    assert payload["schema"] == "refmark.manifest_diff.v1"
+    assert payload["summary"]["added_refs"] == 1
+    assert payload["summary"]["removed_refs"] == 1
+    assert payload["summary"]["changed_refs"] == 1
+    assert payload["affected_example_count"] == 2
+    assert payload["revision_diff"]["added_refs"] == ["policy:P03"]
+    assert payload["revision_diff"]["removed_refs"] == ["policy:P02"]
+    assert payload["revision_diff"]["changed_refs"] == ["policy:P01"]
+    assert [item["changed_refs"] for item in payload["affected_examples"]] == [["policy:P01"], []]
+    assert [item["missing_refs"] for item in payload["affected_examples"]] == [[], ["policy:P02"]]
+
+
 def test_lifecycle_primitives_detect_changed_removed_and_stale_examples():
     previous = CorpusMap.from_records(
         [

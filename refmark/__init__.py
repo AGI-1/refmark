@@ -1,7 +1,9 @@
 """Public package surface for refmark."""
 
+from refmark.adapt_plan import AdaptationAction, AdaptationPlan, build_adaptation_plan, read_smell_report
 from refmark.citations import CitationRef, parse_citation_refs, validate_citation_refs
 from refmark.core import inject, strip
+from refmark.data_smells import DataSmell, DataSmellReport, build_data_smell_report
 from refmark.discovery import (
     DiscoveryContextCard,
     DiscoveryManifest,
@@ -92,6 +94,8 @@ __all__ = [
     "apply_ref_diff",
     "build_reference_prompt",
     "build_eval_provenance",
+    "AdaptationAction",
+    "AdaptationPlan",
     "EnrichedPrompt",
     "AlignmentCandidate",
     "AlignmentReport",
@@ -102,6 +106,8 @@ __all__ = [
     "CorpusMapSnapshot",
     "CorpusRevisionDiff",
     "ContextPack",
+    "DataSmell",
+    "DataSmellReport",
     "DiscoveryManifest",
     "DiscoveryContextCard",
     "DiscoveryConfig",
@@ -128,10 +134,12 @@ __all__ = [
     "align_documents",
     "analyze_feedback",
     "adaptation_recommendations",
+    "build_adaptation_plan",
     "build_region_manifest",
     "build_discovery_context_card",
     "build_question_plan",
     "build_section_map",
+    "build_data_smell_report",
     "default_full_pipeline_config",
     "discover_corpus",
     "discovery_map_items",
@@ -156,6 +164,7 @@ __all__ = [
     "parse_citation_refs",
     "read_manifest",
     "read_feedback_jsonl",
+    "read_smell_report",
     "render_coverage_html",
     "render_coverage_report_html",
     "render_discovery_map_html",

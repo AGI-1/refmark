@@ -521,6 +521,197 @@ def test_pipeline_cli_eval_index(tmp_path):
     assert "weighted_smell_score" in smell_payload["diagnostics"]["summary"]
 
 
+def test_pipeline_cli_compare_index_reports_multiple_strategies(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    report = tmp_path / "compare.json"
+    source.write_text(
+        "Refunds are available within 30 days for damaged goods.\n\n"
+        "Shipping labels can be printed from the account portal.\n",
+        encoding="utf-8",
+    )
+    examples.write_text(
+        json.dumps({"query": "refunds damaged goods", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(source),
+            "-o",
+            str(manifest),
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "compare-index",
+            str(index),
+            str(examples),
+            "--manifest",
+            str(manifest),
+            "--strategies",
+            "flat,hierarchical,rerank",
+            "--top-k",
+            "2",
+            "--min-best-hit-at-k",
+            "0.9",
+            "--fail-on-regression",
+            "-o",
+            str(report),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert compared.returncode == 0, compared.stderr
+    assert payload["schema"] == "refmark.compare_index_report.v1"
+    assert set(payload["runs"]) == {"flat", "hierarchical", "rerank"}
+    assert payload["best_by_hit_at_k"]["metrics"]["hit_at_k"] == 1.0
+    assert payload["ci_status"]["status"] == "ok"
+    assert payload["validation"] == {"missing": [], "ambiguous": []}
+    assert payload["run_artifacts"]["flat"]["comparison_key"]
+    assert payload["smell_summaries"]["flat"]["smell_count"] >= 0
+
+
+def test_pipeline_cli_compare_runs_reports_saved_eval_deltas(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    flat_report = tmp_path / "eval_flat.json"
+    rerank_report = tmp_path / "eval_rerank.json"
+    compare_report = tmp_path / "compare_runs.json"
+    source.write_text(
+        "Refunds are available within 30 days for damaged goods.\n\n"
+        "Shipping labels can be printed from the account portal.\n",
+        encoding="utf-8",
+    )
+    examples.write_text(
+        json.dumps({"query": "refunds damaged goods", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(source),
+            "-o",
+            str(manifest),
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for strategy, output in [("flat", flat_report), ("rerank", rerank_report)]:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "refmark.cli",
+                "eval-index",
+                str(index),
+                str(examples),
+                "--manifest",
+                str(manifest),
+                "--strategy",
+                strategy,
+                "--top-k",
+                "2",
+                "-o",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "compare-runs",
+            str(flat_report),
+            str(rerank_report),
+            "--baseline",
+            "flat",
+            "--min-best-hit-at-k",
+            "0.9",
+            "--fail-on-regression",
+            "-o",
+            str(compare_report),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(compare_report.read_text(encoding="utf-8"))
+    assert compared.returncode == 0, compared.stderr
+    assert payload["schema"] == "refmark.compare_runs_report.v1"
+    assert payload["compatibility"]["same_corpus_and_eval"] is True
+    assert [row["name"] for row in payload["table"]] == ["flat", "rerank"]
+    assert payload["baseline"] == "flat"
+    assert payload["best_by_hit_at_k"]["metrics"]["hit_at_k"] == 1.0
+    assert payload["table"][1]["delta_vs_baseline"]["hit_at_k"] == 0.0
+
+
 def test_pipeline_cli_map_and_build_index_use_same_directory_doc_ids(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -670,6 +861,91 @@ def test_pipeline_cli_eval_index_fails_thresholds_and_preserves_stale_hashes(tmp
     payload = json.loads(evaluated.stdout)
     assert payload["ci_status"]["status"] == "fail"
     assert payload["stale_examples"][0]["changed_refs"] == ["source:P01"]
+    assert payload["data_smells"]["summary"]["by_type"]["stale_label"] == 1
+
+
+def test_pipeline_cli_eval_index_writes_data_smell_report(tmp_path):
+    source = tmp_path / "source.txt"
+    index = tmp_path / "index.json"
+    manifest = tmp_path / "manifest.jsonl"
+    examples = tmp_path / "examples.jsonl"
+    retriever_results = tmp_path / "hits.jsonl"
+    smells = tmp_path / "smells.json"
+    adapt_plan = tmp_path / "adapt_plan.json"
+    source.write_text("Refunds are available within 30 days.\n\nShipping is non-refundable.\n", encoding="utf-8")
+    examples.write_text(
+        json.dumps({"query": "where are refunds", "gold_refs": ["source:P01"]}) + "\n",
+        encoding="utf-8",
+    )
+    retriever_results.write_text(
+        json.dumps({"query": "where are refunds", "hits": [{"stable_ref": "source:P02", "score": 1.0}]}) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(source),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "map",
+            str(source),
+            "-o",
+            str(manifest),
+            "--min-words",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    evaluated = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(examples),
+            "--manifest",
+            str(manifest),
+            "--retriever-results",
+            str(retriever_results),
+            "--smell-report-output",
+            str(smells),
+            "--adapt-plan-output",
+            str(adapt_plan),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(evaluated.stdout)
+    smell_payload = json.loads(smells.read_text(encoding="utf-8"))
+    plan_payload = json.loads(adapt_plan.read_text(encoding="utf-8"))
+    assert payload["data_smells"]["schema"] == "refmark.data_smells.v1"
+    assert payload["adaptation_plan"]["schema"] == "refmark.adaptation_plan.v1"
+    assert smell_payload["summary"]["by_type"]["hard_ref"] == 1
+    assert plan_payload["summary"]["source_run_fingerprint"] == smell_payload["summary"]["run_fingerprint"]
+    assert any(smell["type"] == "confusion_pair" for smell in smell_payload["smells"])
 
 
 def test_pipeline_cli_eval_index_can_call_http_retriever(tmp_path):

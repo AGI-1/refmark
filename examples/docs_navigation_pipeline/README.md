@@ -3,7 +3,9 @@
 This is the small frozen path for the product-shaped Refmark workflow:
 
 ```text
-software docs -> refmark manifest -> portable search index -> local navigation
+software docs -> refmark manifest -> portable search index
+              -> evidence eval -> data smells -> adaptation plan
+              -> local navigation
 ```
 
 The runtime side has no vector database, no API call, no embedding service, and
@@ -31,6 +33,9 @@ The script writes ignored artifacts under `examples/docs_navigation_pipeline/out
 - `docs.index.json`: portable BM25 region index
 - `docs.browser.json`: compact browser-search payload
 - `eval_flat.json`, `eval_hierarchical.json`, `eval_rerank.json`: evidence eval reports
+- `compare_index.json`: one side-by-side comparison of flat, hierarchical, and reranked modes
+- `smells.json`: reviewable data-smell report from the rerank eval
+- `adaptation_plan.json`: conservative review-required adaptation actions
 - `sample_query.json`: example navigation hits for a free-text query
 
 The full-pipeline config writes the same family of artifacts under
@@ -60,7 +65,17 @@ python -m refmark.cli eval-index \
   --manifest examples/docs_navigation_pipeline/output/corpus.refmark.jsonl \
   --strategy rerank \
   --top-k 5 \
+  --smell-report-output examples/docs_navigation_pipeline/output/smells.json \
+  --adapt-plan-output examples/docs_navigation_pipeline/output/adaptation_plan.json \
   -o examples/docs_navigation_pipeline/output/eval_rerank.json
+
+python -m refmark.cli compare-index \
+  examples/docs_navigation_pipeline/output/docs.index.json \
+  examples/docs_navigation_pipeline/eval_questions.jsonl \
+  --manifest examples/docs_navigation_pipeline/output/corpus.refmark.jsonl \
+  --strategies flat,hierarchical,rerank \
+  --top-k 5 \
+  -o examples/docs_navigation_pipeline/output/compare_index.json
 
 python -m refmark.cli search-index \
   examples/docs_navigation_pipeline/output/docs.index.json \
@@ -79,6 +94,8 @@ This example is deliberately modest. It proves the integration shape:
   source docs;
 - the local index returns concrete refs such as `security:P02`;
 - the same refs can be evaluated against a small query suite;
+- eval weaknesses become data-smell reports and adaptation-plan actions instead
+  of disappearing into one average score;
 - the browser export can be shipped with docs for client-side navigation.
 
 It does not claim that local BM25 beats embeddings or vector databases. Refmark

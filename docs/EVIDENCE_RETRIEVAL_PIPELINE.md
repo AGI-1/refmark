@@ -1,5 +1,8 @@
 # Evidence Retrieval Pipeline
 
+For the compact public workflow, start with
+[Evidence CI Quickstart](QUICKSTART_EVIDENCE_CI.md).
+
 Refmark turns a corpus into a testable evidence space. The pipeline is:
 
 ```text
@@ -311,6 +314,34 @@ This also gives a clean acceptance test for future retrieval variants. A method
 that improves hit@10 while increasing wrong high-confidence jumps may be worse
 for a browser-navigation UI; a method that preserves high-precision jumps and
 improves fallback candidate recall is more useful.
+
+To compare the built-in portable-index retrieval modes in one artifact:
+
+```bash
+python -m refmark.cli compare-index docs.refmark-index.json eval_questions.jsonl \
+  --manifest corpus.refmark.jsonl \
+  --strategies flat,hierarchical,rerank \
+  --top-k 10 \
+  --min-best-hit-at-k 0.80 \
+  --fail-on-regression \
+  -o runs/compare_index.json
+```
+
+The `refmark.compare_index_report.v1` artifact keeps the corpus/eval
+fingerprints shared and records per-strategy metrics, smell summaries, run
+artifacts, and the current best strategy by hit@k. It is a small CLI
+counterpart to the Python `EvalSuite.compare({...})` API.
+
+If the runs were produced separately, compare saved artifacts instead:
+
+```bash
+python -m refmark.cli compare-runs runs/eval_bm25.json runs/eval_hybrid.json \
+  --baseline eval_bm25.json \
+  -o runs/compare_runs.json
+```
+
+That path is meant for external retrievers, hosted services, CI jobs, and
+previously archived eval reports.
 
 ## Frozen No-Infra Docs Navigation Example
 

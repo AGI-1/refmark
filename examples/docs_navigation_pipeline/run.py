@@ -17,6 +17,9 @@ SECTION_MAP = OUTPUT / "sections.json"
 INDEX = OUTPUT / "docs.index.json"
 BROWSER_INDEX = OUTPUT / "docs.browser.json"
 QUESTIONS = EXAMPLE / "eval_questions.jsonl"
+SMELLS = OUTPUT / "smells.json"
+ADAPTATION_PLAN = OUTPUT / "adaptation_plan.json"
+COMPARISON = OUTPUT / "compare_index.json"
 
 
 def main() -> None:
@@ -27,8 +30,13 @@ def main() -> None:
     run_cli("export-browser-index", str(INDEX), "-o", str(BROWSER_INDEX))
 
     reports = {}
+    smell_summary = None
+    plan_summary = None
     for strategy in ("flat", "hierarchical", "rerank"):
         report = OUTPUT / f"eval_{strategy}.json"
+        extra_args = []
+        if strategy == "rerank":
+            extra_args = ["--smell-report-output", str(SMELLS), "--adapt-plan-output", str(ADAPTATION_PLAN)]
         run_cli(
             "eval-index",
             str(INDEX),
@@ -41,11 +49,32 @@ def main() -> None:
             "5",
             "--expand-after",
             "1",
+            *extra_args,
             "-o",
             str(report),
         )
         payload = json.loads(report.read_text(encoding="utf-8"))
         reports[strategy] = payload["metrics"]
+        if strategy == "rerank":
+            smell_summary = payload["data_smells"]["summary"]
+
+    plan_summary = json.loads(ADAPTATION_PLAN.read_text(encoding="utf-8"))["summary"]
+    run_cli(
+        "compare-index",
+        str(INDEX),
+        str(QUESTIONS),
+        "--manifest",
+        str(MANIFEST),
+        "--strategies",
+        "flat,hierarchical,rerank",
+        "--top-k",
+        "5",
+        "--expand-after",
+        "1",
+        "-o",
+        str(COMPARISON),
+    )
+    comparison = json.loads(COMPARISON.read_text(encoding="utf-8"))
 
     query = "How do I rotate API tokens without downtime?"
     hits = capture_cli(
@@ -70,6 +99,9 @@ def main() -> None:
         "section_map": str(SECTION_MAP.relative_to(ROOT)),
         "index": str(INDEX.relative_to(ROOT)),
         "browser_index": str(BROWSER_INDEX.relative_to(ROOT)),
+        "smell_report": str(SMELLS.relative_to(ROOT)),
+        "adaptation_plan": str(ADAPTATION_PLAN.relative_to(ROOT)),
+        "comparison": str(COMPARISON.relative_to(ROOT)),
         "reports": {
             name: {
                 "count": metrics.get("count"),
@@ -80,6 +112,9 @@ def main() -> None:
             }
             for name, metrics in reports.items()
         },
+        "smell_summary": smell_summary,
+        "adaptation_plan_summary": plan_summary,
+        "best_strategy": comparison["best_by_hit_at_k"],
         "sample_top_ref": sample_payload["hits"][0]["stable_ref"] if sample_payload["hits"] else None,
     }
     (OUTPUT / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

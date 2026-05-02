@@ -2,17 +2,21 @@
 
 This note defines the narrow release shape that is supportable by the current evidence.
 
+For the evidence behind this scope, see [Evidence Summary](EVIDENCE_SUMMARY.md).
+
 ## Stable Scope To Publish Now
 
 1. Corpus CI for retrieval: `query -> gold refs/ranges`, retriever comparison,
    stale examples, provenance checks, and adaptation diagnostics
 2. Deterministic locate-only citation evaluation with public data-smell metrics
-3. Highlighted source review for cited anchor regions
-4. Portable local documentation search indexes as an evidence-eval demo/product
+3. Data-smell reports and conservative adaptation plans for review-required
+   retrieval improvement loops
+4. Highlighted source review for cited anchor regions
+5. Portable local documentation search indexes as an evidence-eval demo/product
    wedge
-5. Stable same-file multi-region edits for Python and TypeScript via
+6. Stable same-file multi-region edits for Python and TypeScript via
    `apply_ref_diff`
-6. Corpus-local anchored QA dataset generation and training prototype through
+7. Corpus-local anchored QA dataset generation and training prototype through
    `refmark_train`, framed as exploratory
 
 ## Supported User Journeys
@@ -26,10 +30,12 @@ Supported today as the strongest public workflow:
 - compare arbitrary retrievers through `EvalSuite` or `eval-index`
 - validate stale refs after corpus changes
 - inspect hard refs, confusions, query-style gaps, and adaptation candidates
+- convert data-smell reports into review-required adaptation plans
 - optionally aggregate production feedback through `feedback-diagnostics`
 
 Primary files:
 
+- [QUICKSTART_EVIDENCE_CI.md](QUICKSTART_EVIDENCE_CI.md)
 - [EVIDENCE_RETRIEVAL_PIPELINE.md](EVIDENCE_RETRIEVAL_PIPELINE.md)
 - [PRODUCTION_FEEDBACK_LOOP.md](PRODUCTION_FEEDBACK_LOOP.md)
 - `refmark/rag_eval.py`
@@ -39,7 +45,8 @@ Public verification command:
 
 ```bash
 python examples/docs_navigation_pipeline/run.py
-python -m refmark.cli eval-index examples/docs_navigation_pipeline/output/docs.index.json examples/docs_navigation_pipeline/eval_questions.jsonl --manifest examples/docs_navigation_pipeline/output/corpus.refmark.jsonl
+python examples/library_integration_demo/run.py
+python -m refmark.cli eval-index examples/docs_navigation_pipeline/output/docs.index.json examples/docs_navigation_pipeline/eval_questions.jsonl --manifest examples/docs_navigation_pipeline/output/corpus.refmark.jsonl --smell-report-output examples/docs_navigation_pipeline/output/smells.json --adapt-plan-output examples/docs_navigation_pipeline/output/adaptation_plan.json
 ```
 
 ### 2. Exact Citations With Bigger Models

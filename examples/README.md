@@ -4,12 +4,19 @@ These examples are intentionally small and inspectable. They are meant for
 researchers and developers who want to poke at the core claims without running
 a broad benchmark harness.
 
+For the canonical product-shaped path, run
+`python examples/docs_navigation_pipeline/run.py` or follow
+[Evidence CI Quickstart](../docs/QUICKSTART_EVIDENCE_CI.md).
+
 Run them from the repository root:
 
 ```bash
 python examples/citation_qa/run_eval.py
 python examples/data_smells/run.py
 python examples/eval_tool_integrations_demo/run.py
+python examples/library_integration_demo/run.py
+python examples/ragas_refmark_mutation_demo/run.py
+python examples/lifecycle_tool_integrations_demo/run.py
 python examples/judge_free_rewards/run.py
 python examples/lifecycle_ci_demo/run.py
 python examples/multidiff_demo/run.py
@@ -32,6 +39,16 @@ python examples/rag_retrieval_benchmark/run.py
 
 Edit `examples/citation_qa/predictions.json` to see the scores change.
 
+## Library Integration
+
+`library_integration_demo` shows the attach point for an existing retrieval
+system. A normal Python callback returns stable refs or hit dictionaries, then
+`EvalSuite.evaluate(...)` produces evidence metrics, data smells, an adaptation
+plan, and a comparable run artifact.
+
+This is the path for teams that already have BM25, embeddings, a vector DB, or
+hosted retrieval service and only want Refmark as the evidence-evaluation layer.
+
 ## Data Smells
 
 `data_smells` compares two mock models:
@@ -41,6 +58,13 @@ Edit `examples/citation_qa/predictions.json` to see the scores change.
 
 This demonstrates why locate-only metrics are more informative than exact
 match alone.
+
+The same example also writes a first-class retrieval smell report with
+`build_data_smell_report(...)`. That second report demonstrates stale labels,
+hard refs, confusion pairs, query-style gaps, over/undercitation, low-confidence
+hits, and query magnets as reviewable adaptation inputs. It also writes an
+`adaptation_plan.json` artifact, equivalent to running `refmark adapt-plan` on
+the smell report.
 
 ## Judge-Free Rewards
 
@@ -104,7 +128,8 @@ documentation navigation:
 2. build a local portable index
 3. export a browser-search payload
 4. evaluate query -> gold-ref examples against the index
-5. run a free-text navigation query that returns stable refs and snippets
+5. write a data-smell report and adaptation plan for the evaluated run
+6. run a free-text navigation query that returns stable refs and snippets
 
 It intentionally avoids vector databases and runtime model calls. Larger
 comparisons against embeddings or hosted retrievers can still be scored through
@@ -132,6 +157,29 @@ Ragas-style rows, DeepEval-style cases, and Phoenix/Langfuse-style trace events.
 The adapters are dependency-free handoff formats: existing eval/observability
 tools can ingest the rows while Refmark preserves exact refs, source hashes,
 stale-state metadata, and corpus/run fingerprints.
+
+`real_sdk_smoke.py` is an optional check for environments that already have
+those SDKs installed. It constructs native Ragas, DeepEval, Langfuse, and
+Phoenix/OpenInference objects when available, while skipping hosted ingestion
+that would require external credentials or a running observability server.
+
+`ragas_refmark_mutation_demo` shows the lifecycle difference directly. A saved
+`query -> gold_ref` eval suite is created on one corpus revision, the corpus is
+mutated, and then both plain Ragas-style rows and Refmark-enriched rows are
+exported. The plain rows still contain valid strings for answer/context scoring;
+the Refmark-enriched rows additionally flag stale labels through preserved
+source hashes and corpus fingerprints.
+
+`lifecycle_tool_integrations_demo` uses compact summary rows from five
+Git-backed documentation lifecycle runs. It exports tracker-style rows and a
+short report showing how Ragas-style answer/context evaluation can be paired
+with Refmark lifecycle metrics such as stale labels, review-needed refs, and
+naive silent-wrong rates.
+
+Data-smell reports can be generated from any `eval-index` run with
+`--smell-report-output`. They consolidate stale labels, hard refs, confusion
+pairs, query-style gaps, citation breadth issues, confidence gaps, and query
+magnets into one reviewable JSON artifact for humans or adaptation agents.
 
 ## Browser Page Search
 

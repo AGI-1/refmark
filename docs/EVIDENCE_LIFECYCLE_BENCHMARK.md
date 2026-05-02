@@ -110,6 +110,21 @@ separates eval-row staleness from corpus-map churn:
   hashes;
 - `removed_refs`: refs present in the previous manifest but absent now.
 
+When a pipeline only needs the shadow-manifest delta, use `manifest-diff`:
+
+```bash
+python -m refmark.cli manifest-diff \
+  .refmark/manifest.old.jsonl \
+  .refmark/manifest.new.jsonl \
+  --examples eval_questions.old.jsonl \
+  --max-stale 0 \
+  --output runs/manifest_diff.json
+```
+
+The `refmark.manifest_diff.v1` artifact is intentionally smaller than full
+label validation. It reports address-space churn, corpus fingerprints, optional
+affected eval examples, and the same CI-style threshold status.
+
 The scripts emit both full JSON and compact `summary_rows`. Use
 `--summary-output` or `--csv-output` when you want a table for a paper,
 spreadsheet, CI dashboard, or model-review handoff. Generated outputs are

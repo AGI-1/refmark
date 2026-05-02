@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from refmark import (
     CorpusMap,
     EvalExample,
+    EvalRun,
     EvalSuite,
     RegionRecord,
     eval_tool_summary,
@@ -26,8 +27,7 @@ HERE = Path(__file__).resolve().parent
 OUTPUT = HERE / "output"
 
 
-def main() -> None:
-    OUTPUT.mkdir(parents=True, exist_ok=True)
+def build_demo() -> tuple[EvalSuite, EvalRun, dict[str, str]]:
     corpus = CorpusMap.from_records(
         [
             _record("P01", "Refunds are available within 30 days.", 1),
@@ -53,11 +53,16 @@ def main() -> None:
         name="demo_retriever",
         k=2,
     )
-
     answers = {
         "Which clause covers expedited shipping?": "Expedited shipping is covered by policy:P02.",
         "Which clauses describe refunds and shipping?": "Refunds and expedited shipping are covered by policy:P01-policy:P02.",
     }
+    return suite, run, answers
+
+
+def main() -> None:
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    suite, run, answers = build_demo()
     write_ragas_jsonl(OUTPUT / "ragas_rows.jsonl", suite, run, answers=answers)
     write_deepeval_jsonl(OUTPUT / "deepeval_cases.jsonl", suite, run, answers=answers)
     write_trace_jsonl(OUTPUT / "trace_events.jsonl", suite, run, tool="phoenix", answers=answers)

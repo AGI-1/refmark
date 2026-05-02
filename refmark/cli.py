@@ -9,8 +9,10 @@ from refmark.config import load_local_env
 
 load_local_env()
 
+from refmark.adapt_plan import build_adaptation_plan, read_smell_report
 from refmark.citations import citation_refs_to_strings, parse_citation_refs
 from refmark.core import inject, strip
+from refmark.data_smells import build_data_smell_report
 from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
 from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, repair_discovery_clusters, review_discovery, write_discovery
@@ -219,7 +221,45 @@ def main():
     eval_index_parser.add_argument("--fail-on-regression", action="store_true", help="Exit nonzero when any threshold is breached.")
     eval_index_parser.add_argument("--provenance-out", default=None, help="Optional provenance JSON output path.")
     eval_index_parser.add_argument("--expect-provenance", default=None, help="Fail if current inputs/settings differ from this provenance JSON.")
+    eval_index_parser.add_argument("--smell-report-output", default=None, help="Optional first-class data-smell report JSON output path.")
+    eval_index_parser.add_argument("--adapt-plan-output", default=None, help="Optional adaptation-plan JSON output path derived from the data-smell report.")
     eval_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    compare_index_parser = subparsers.add_parser(
+        "compare-index",
+        help="Compare built-in portable-index retrieval strategies against one eval suite.",
+    )
+    compare_index_parser.add_argument("index", help="Index JSON produced by build-index.")
+    compare_index_parser.add_argument("examples", help="JSONL rows with query and gold_refs fields.")
+    compare_index_parser.add_argument("--manifest", default=None, help="Optional current region manifest for validation and stale-ref checks.")
+    compare_index_parser.add_argument("--strategies", default="flat,hierarchical,rerank", help="Comma-separated strategies: flat,hierarchical,rerank.")
+    compare_index_parser.add_argument("--top-k", type=int, default=10)
+    compare_index_parser.add_argument("--doc-top-k", type=int, default=5)
+    compare_index_parser.add_argument("--candidate-k", type=int, default=30)
+    compare_index_parser.add_argument("--expand-before", type=int, default=0)
+    compare_index_parser.add_argument("--expand-after", type=int, default=0)
+    compare_index_parser.add_argument("--min-best-hit-at-k", type=float, default=None, help="Fail when the best strategy hit@k is below this threshold.")
+    compare_index_parser.add_argument("--fail-on-regression", action="store_true", help="Exit nonzero when a configured threshold is breached.")
+    compare_index_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    compare_runs_parser = subparsers.add_parser(
+        "compare-runs",
+        help="Compare saved Refmark eval artifacts or eval-index reports without rerunning retrieval.",
+    )
+    compare_runs_parser.add_argument("reports", nargs="+", help="Eval-index reports or eval_run_artifact JSON files.")
+    compare_runs_parser.add_argument("--allow-mismatch", action="store_true", help="Allow different corpus/eval fingerprints and mark the report non-comparable.")
+    compare_runs_parser.add_argument("--baseline", default=None, help="Optional report/run name to use as delta baseline. Defaults to the first report.")
+    compare_runs_parser.add_argument("--min-best-hit-at-k", type=float, default=None, help="Fail when the best run hit@k is below this threshold.")
+    compare_runs_parser.add_argument("--fail-on-regression", action="store_true", help="Exit nonzero when compatibility or threshold checks fail.")
+    compare_runs_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    adapt_plan_parser = subparsers.add_parser(
+        "adapt-plan",
+        help="Convert a Refmark data-smell report into reviewable adaptation actions.",
+    )
+    adapt_plan_parser.add_argument("smell_report", help="JSON report with schema refmark.data_smells.v1.")
+    adapt_plan_parser.add_argument("--max-actions", type=int, default=80)
+    adapt_plan_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path. Defaults to stdout.")
 
     feedback_parser = subparsers.add_parser(
         "feedback-diagnostics",
@@ -274,6 +314,20 @@ def main():
     lifecycle_validate_parser.add_argument("--max-changed-refs", type=int, default=None, help="Fail if changed refs exceed this count.")
     lifecycle_validate_parser.add_argument("--max-removed-refs", type=int, default=None, help="Fail if removed/deleted refs exceed this count.")
     lifecycle_validate_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
+    manifest_diff_parser = subparsers.add_parser(
+        "manifest-diff",
+        help="Compare two region manifests and optionally report affected eval examples.",
+    )
+    manifest_diff_parser.add_argument("previous_manifest", help="Previous region manifest JSONL.")
+    manifest_diff_parser.add_argument("current_manifest", help="Current region manifest JSONL.")
+    manifest_diff_parser.add_argument("--examples", default=None, help="Optional eval JSONL rows with query and gold_refs.")
+    manifest_diff_parser.add_argument("--previous-revision", default=None)
+    manifest_diff_parser.add_argument("--current-revision", default=None)
+    manifest_diff_parser.add_argument("--max-stale", type=int, default=None, help="Fail if affected examples exceed this count.")
+    manifest_diff_parser.add_argument("--max-changed-refs", type=int, default=None, help="Fail if changed refs exceed this count.")
+    manifest_diff_parser.add_argument("--max-removed-refs", type=int, default=None, help="Fail if removed/deleted refs exceed this count.")
+    manifest_diff_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
 
     pack_context_parser = subparsers.add_parser(
         "pack-context",
@@ -448,6 +502,12 @@ def main():
         _handle_inspect_index(args)
     elif args.command == "eval-index":
         _handle_eval_index(args)
+    elif args.command == "compare-index":
+        _handle_compare_index(args)
+    elif args.command == "compare-runs":
+        _handle_compare_runs(args)
+    elif args.command == "adapt-plan":
+        _handle_adapt_plan(args)
     elif args.command == "feedback-diagnostics":
         _handle_feedback_diagnostics(args)
     elif args.command == "lifecycle-git":
@@ -456,6 +516,8 @@ def main():
         _handle_lifecycle_summarize(args)
     elif args.command == "lifecycle-validate-labels":
         _handle_lifecycle_validate_labels(args)
+    elif args.command == "manifest-diff":
+        _handle_manifest_diff(args)
     elif args.command == "pack-context":
         _handle_pack_context(args)
     elif args.command == "question-prompt":
@@ -769,6 +831,8 @@ def _handle_eval_index(args):
     run = suite.evaluate(retrieve, name=args.strategy, k=args.top_k)
     validation = suite.validate_refs()
     stale = [item.to_dict() for item in suite.stale_examples()]
+    smell_report = build_data_smell_report(suite, run).to_dict()
+    adaptation_plan = build_adaptation_plan(smell_report).to_dict()
     ci_status = _eval_ci_status(run.metrics, len(stale), args)
     run_artifact = suite.run_artifact(
         run,
@@ -792,6 +856,8 @@ def _handle_eval_index(args):
         "comparison_key": run_artifact["comparison_key"],
         "metrics": run.metrics,
         "diagnostics": run.diagnostics,
+        "data_smells": smell_report,
+        "adaptation_plan": adaptation_plan,
         "validation": validation,
         "stale_examples": stale,
         "ci_status": ci_status,
@@ -804,6 +870,12 @@ def _handle_eval_index(args):
     if args.provenance_out:
         Path(args.provenance_out).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
         print(f"[OK] Wrote eval provenance to {args.provenance_out}", file=sys.stderr)
+    if args.smell_report_output:
+        Path(args.smell_report_output).write_text(json.dumps(smell_report, indent=2), encoding="utf-8")
+        print(f"[OK] Wrote data-smell report to {args.smell_report_output}", file=sys.stderr)
+    if args.adapt_plan_output:
+        Path(args.adapt_plan_output).write_text(json.dumps(adaptation_plan, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"[OK] Wrote adaptation plan to {args.adapt_plan_output}", file=sys.stderr)
     if args.output:
         Path(args.output).write_text(output, encoding="utf-8")
         print(f"[OK] Wrote retrieval eval report to {args.output}", file=sys.stderr)
@@ -812,6 +884,134 @@ def _handle_eval_index(args):
     if ci_status["status"] == "fail":
         print(json.dumps({"ci_status": ci_status}, indent=2), file=sys.stderr)
         sys.exit(3)
+
+
+def _handle_compare_index(args):
+    index = load_search_index(args.index)
+    corpus = CorpusMap.from_manifest(args.manifest, metadata={"manifest_path": args.manifest}) if args.manifest else _corpus_from_search_index(index)
+    rows = _read_jsonl(args.examples)
+    suite = EvalSuite.from_rows(rows, corpus=corpus).with_source_hashes()
+    strategies = _parse_index_strategies(args.strategies)
+    base_settings = {
+        "top_k": args.top_k,
+        "doc_top_k": args.doc_top_k,
+        "candidate_k": args.candidate_k,
+        "expand_before": args.expand_before,
+        "expand_after": args.expand_after,
+        "manifest": args.manifest,
+    }
+    runs: dict[str, dict[str, object]] = {}
+    run_artifacts: dict[str, dict[str, object]] = {}
+    smell_summaries: dict[str, dict[str, object]] = {}
+    for strategy in strategies:
+        retrieve = _index_strategy_retriever(
+            index,
+            strategy=strategy,
+            top_k=args.top_k,
+            doc_top_k=args.doc_top_k,
+            candidate_k=args.candidate_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )
+        run = suite.evaluate(retrieve, name=strategy, k=args.top_k)
+        settings = {"strategy": strategy, **base_settings}
+        artifact = suite.run_artifact(
+            run,
+            settings=settings,
+            artifacts={"index": args.index, "manifest": args.manifest, "examples": args.examples},
+        )
+        smell_report = build_data_smell_report(suite, run).to_dict()
+        runs[strategy] = {
+            "metrics": run.metrics,
+            "diagnostics": run.diagnostics,
+            "fingerprint": run.fingerprint,
+            "comparison_key": artifact["comparison_key"],
+        }
+        run_artifacts[strategy] = artifact
+        smell_summaries[strategy] = smell_report["summary"]
+    best = _best_index_strategy(runs)
+    stale = [item.to_dict() for item in suite.stale_examples()]
+    ci_status = _compare_index_ci_status(
+        best_hit_at_k=best["metrics"].get("hit_at_k", 0.0) if best else 0.0,
+        min_best_hit_at_k=args.min_best_hit_at_k,
+        fail_on_regression=args.fail_on_regression,
+    )
+    payload = {
+        "schema": "refmark.compare_index_report.v1",
+        "index": args.index,
+        "manifest": args.manifest,
+        "examples": args.examples,
+        "settings": {**base_settings, "strategies": strategies},
+        "corpus_fingerprint": corpus.fingerprint,
+        "eval_suite_fingerprint": suite.fingerprint,
+        "validation": suite.validate_refs(),
+        "stale_examples": stale,
+        "stale_example_count": len(stale),
+        "runs": runs,
+        "smell_summaries": smell_summaries,
+        "run_artifacts": run_artifacts,
+        "best_by_hit_at_k": best,
+        "ci_status": ci_status,
+        "status": ci_status["status"],
+    }
+    output = json.dumps(payload, indent=2)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote index comparison report to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+    if ci_status["status"] == "fail":
+        print(json.dumps({"ci_status": ci_status}, indent=2), file=sys.stderr)
+        sys.exit(3)
+
+
+def _handle_compare_runs(args):
+    runs = [_load_eval_run_summary(path) for path in args.reports]
+    compatibility = _run_comparison_compatibility(runs)
+    if not args.allow_mismatch and not compatibility["same_corpus_and_eval"]:
+        compatibility["status"] = "fail"
+    baseline = _choose_baseline_run(runs, args.baseline)
+    best = _best_saved_run(runs)
+    table = [_saved_run_table_row(run, baseline) for run in runs]
+    ci_status = _compare_runs_ci_status(
+        compatibility=compatibility,
+        best_hit_at_k=best["metrics"].get("hit_at_k", 0.0) if best else 0.0,
+        min_best_hit_at_k=args.min_best_hit_at_k,
+        fail_on_regression=args.fail_on_regression,
+    )
+    payload = {
+        "schema": "refmark.compare_runs_report.v1",
+        "inputs": args.reports,
+        "compatibility": compatibility,
+        "baseline": baseline["name"] if baseline else None,
+        "best_by_hit_at_k": best,
+        "runs": runs,
+        "table": table,
+        "ci_status": ci_status,
+        "status": ci_status["status"],
+    }
+    output = json.dumps(payload, indent=2)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote run comparison report to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+    if ci_status["status"] == "fail":
+        print(json.dumps({"ci_status": ci_status}, indent=2), file=sys.stderr)
+        sys.exit(3)
+
+
+def _handle_adapt_plan(args):
+    smell_report = read_smell_report(args.smell_report)
+    plan = build_adaptation_plan(smell_report, max_actions=args.max_actions)
+    output = json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote adaptation plan to {args.output}", file=sys.stderr)
+    else:
+        print(output)
 
 
 def _handle_feedback_diagnostics(args):
@@ -907,6 +1107,66 @@ def _handle_lifecycle_validate_labels(args):
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(output, encoding="utf-8")
         print(f"[OK] Wrote lifecycle label validation to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+    if payload["status"] == "fail":
+        sys.exit(3)
+
+
+def _handle_manifest_diff(args):
+    previous = CorpusMap.from_manifest(
+        args.previous_manifest,
+        revision_id=args.previous_revision,
+        metadata={"manifest_path": args.previous_manifest},
+    )
+    current = CorpusMap.from_manifest(
+        args.current_manifest,
+        revision_id=args.current_revision,
+        metadata={"manifest_path": args.current_manifest},
+    )
+    diff = current.diff_revision(previous)
+    diff_payload = diff.to_dict()
+    stale: list[dict[str, object]] = []
+    eval_suite_summary = None
+    if args.examples:
+        suite = EvalSuite.from_jsonl(args.examples, corpus=current)
+        stale = [item.to_dict() for item in diff.stale_examples(suite.examples)]
+        eval_suite_summary = suite.summary()
+    ci_status = _lifecycle_ci_status(
+        stale_example_count=len(stale),
+        revision_diff=diff_payload,
+        max_stale=args.max_stale,
+        max_changed_refs=args.max_changed_refs,
+        max_removed_refs=args.max_removed_refs,
+    )
+    payload = {
+        "schema": "refmark.manifest_diff.v1",
+        "previous_manifest": args.previous_manifest,
+        "current_manifest": args.current_manifest,
+        "previous_revision": args.previous_revision,
+        "current_revision": args.current_revision,
+        "previous_corpus": previous.snapshot().to_dict(),
+        "current_corpus": current.snapshot().to_dict(),
+        "revision_diff": diff_payload,
+        "affected_examples": stale,
+        "affected_example_count": len(stale),
+        "eval_suite": eval_suite_summary,
+        "summary": {
+            "added_refs": len(diff.added_refs),
+            "removed_refs": len(diff.removed_refs),
+            "changed_refs": len(diff.changed_refs),
+            "unchanged_refs": len(diff.unchanged_refs),
+            "affected_refs": len(diff.affected_refs()),
+            "affected_examples": len(stale),
+        },
+        "ci_status": ci_status,
+        "status": ci_status["status"],
+    }
+    output = json.dumps(payload, indent=2)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote manifest diff to {args.output}", file=sys.stderr)
     else:
         print(output)
     if payload["status"] == "fail":
@@ -1190,31 +1450,254 @@ def _read_jsonl(path: str | Path) -> list[dict[str, object]]:
 
 def _index_retriever(args, index):
     def retrieve(query: str):
-        if args.strategy == "hierarchical":
+        return _index_strategy_retriever(
+            index,
+            strategy=args.strategy,
+            top_k=args.top_k,
+            doc_top_k=args.doc_top_k,
+            candidate_k=args.candidate_k,
+            expand_before=args.expand_before,
+            expand_after=args.expand_after,
+        )(query)
+
+    return retrieve
+
+
+def _index_strategy_retriever(
+    index,
+    *,
+    strategy: str,
+    top_k: int,
+    doc_top_k: int,
+    candidate_k: int,
+    expand_before: int,
+    expand_after: int,
+):
+    def retrieve(query: str):
+        if strategy == "hierarchical":
             return index.search_hierarchical(
                 query,
-                top_k=args.top_k,
-                doc_top_k=args.doc_top_k,
-                candidate_k=args.candidate_k,
-                expand_before=args.expand_before,
-                expand_after=args.expand_after,
+                top_k=top_k,
+                doc_top_k=doc_top_k,
+                candidate_k=candidate_k,
+                expand_before=expand_before,
+                expand_after=expand_after,
             )
-        if args.strategy == "rerank":
+        if strategy == "rerank":
             return index.search_reranked(
                 query,
-                top_k=args.top_k,
-                candidate_k=args.candidate_k,
-                expand_before=args.expand_before,
-                expand_after=args.expand_after,
+                top_k=top_k,
+                candidate_k=candidate_k,
+                expand_before=expand_before,
+                expand_after=expand_after,
             )
         return index.search(
             query,
-            top_k=args.top_k,
-            expand_before=args.expand_before,
-            expand_after=args.expand_after,
+            top_k=top_k,
+            expand_before=expand_before,
+            expand_after=expand_after,
         )
 
     return retrieve
+
+
+def _parse_index_strategies(raw: str) -> list[str]:
+    allowed = {"flat", "hierarchical", "rerank"}
+    strategies = [item.strip() for item in raw.split(",") if item.strip()]
+    invalid = sorted(set(strategies) - allowed)
+    if not strategies:
+        print("Error: --strategies must include at least one strategy.", file=sys.stderr)
+        sys.exit(1)
+    if invalid:
+        print(f"Error: unsupported strategies: {', '.join(invalid)}", file=sys.stderr)
+        sys.exit(1)
+    return list(dict.fromkeys(strategies))
+
+
+def _best_index_strategy(runs: dict[str, dict[str, object]]) -> dict[str, object]:
+    def sort_key(item: tuple[str, dict[str, object]]) -> tuple[float, float, float, float, float, float]:
+        strategy, payload = item
+        metrics = payload["metrics"]
+        if not isinstance(metrics, dict):
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return (
+            float(metrics.get("hit_at_k", 0.0)),
+            float(metrics.get("hit_at_1", 0.0)),
+            float(metrics.get("mrr", 0.0)),
+            float(metrics.get("gold_coverage", 0.0)),
+            float(metrics.get("region_precision", 0.0)),
+            -float(metrics.get("avg_context_refs", 0.0)),
+        )
+
+    if not runs:
+        return {}
+    strategy, payload = max(runs.items(), key=sort_key)
+    metrics = payload["metrics"] if isinstance(payload.get("metrics"), dict) else {}
+    return {"strategy": strategy, "metrics": metrics}
+
+
+def _compare_index_ci_status(
+    *,
+    best_hit_at_k: float,
+    min_best_hit_at_k: float | None,
+    fail_on_regression: bool,
+) -> dict[str, object]:
+    failures: list[dict[str, object]] = []
+    if min_best_hit_at_k is not None and best_hit_at_k < min_best_hit_at_k:
+        failures.append({"metric": "best_hit_at_k", "value": best_hit_at_k, "threshold": min_best_hit_at_k})
+    status = "fail" if fail_on_regression and failures else "ok"
+    return {
+        "status": status,
+        "exit_code": 3 if status == "fail" else 0,
+        "thresholds": {"min_best_hit_at_k": min_best_hit_at_k},
+        "counts": {"failures": len(failures)},
+        "failures": failures,
+    }
+
+
+def _load_eval_run_summary(path: str | Path) -> dict[str, object]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected JSON object in {path}.")
+    if payload.get("schema") == "refmark.eval_index_report.v1":
+        artifact = payload.get("run_artifact")
+        if not isinstance(artifact, dict):
+            raise ValueError(f"eval-index report {path} does not contain run_artifact.")
+        name = str(payload.get("settings", {}).get("strategy") or artifact.get("run_name") or Path(path).stem)
+        return _summary_from_eval_artifact(artifact, source_path=path, name=name, parent_schema=str(payload.get("schema")))
+    if payload.get("schema") == "refmark.eval_run_artifact.v1":
+        return _summary_from_eval_artifact(payload, source_path=path, name=str(payload.get("run_name") or Path(path).stem))
+    raise ValueError(f"Unsupported eval run report schema in {path}: {payload.get('schema')!r}")
+
+
+def _summary_from_eval_artifact(
+    artifact: dict[str, object],
+    *,
+    source_path: str | Path,
+    name: str,
+    parent_schema: str | None = None,
+) -> dict[str, object]:
+    corpus = artifact.get("corpus", {})
+    eval_suite = artifact.get("eval_suite", {})
+    metrics = artifact.get("metrics", {})
+    if not isinstance(corpus, dict) or not isinstance(eval_suite, dict) or not isinstance(metrics, dict):
+        raise ValueError(f"Malformed eval run artifact in {source_path}.")
+    return {
+        "name": name,
+        "source_path": str(source_path),
+        "schema": artifact.get("schema"),
+        "parent_schema": parent_schema,
+        "run_fingerprint": artifact.get("run_fingerprint"),
+        "comparison_key": artifact.get("comparison_key"),
+        "corpus_fingerprint": corpus.get("fingerprint"),
+        "eval_suite_fingerprint": eval_suite.get("fingerprint"),
+        "settings": artifact.get("settings", {}),
+        "artifacts": artifact.get("artifacts", {}),
+        "metrics": metrics,
+    }
+
+
+def _run_comparison_compatibility(runs: list[dict[str, object]]) -> dict[str, object]:
+    corpus_fingerprints = sorted({str(run.get("corpus_fingerprint")) for run in runs})
+    eval_fingerprints = sorted({str(run.get("eval_suite_fingerprint")) for run in runs})
+    same = len(corpus_fingerprints) == 1 and len(eval_fingerprints) == 1
+    return {
+        "status": "ok" if same else "warn",
+        "same_corpus_and_eval": same,
+        "corpus_fingerprints": corpus_fingerprints,
+        "eval_suite_fingerprints": eval_fingerprints,
+        "run_count": len(runs),
+    }
+
+
+def _choose_baseline_run(runs: list[dict[str, object]], baseline: str | None) -> dict[str, object] | None:
+    if not runs:
+        return None
+    if baseline is None:
+        return runs[0]
+    matches = [
+        run
+        for run in runs
+        if run.get("name") == baseline or Path(str(run.get("source_path", ""))).name == baseline or str(run.get("source_path")) == baseline
+    ]
+    if not matches:
+        print(f"Error: --baseline did not match any run: {baseline}", file=sys.stderr)
+        sys.exit(1)
+    return matches[0]
+
+
+def _best_saved_run(runs: list[dict[str, object]]) -> dict[str, object]:
+    def sort_key(run: dict[str, object]) -> tuple[float, float, float, float, float, float]:
+        metrics = run.get("metrics", {})
+        if not isinstance(metrics, dict):
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return (
+            float(metrics.get("hit_at_k", 0.0)),
+            float(metrics.get("hit_at_1", 0.0)),
+            float(metrics.get("mrr", 0.0)),
+            float(metrics.get("gold_coverage", 0.0)),
+            float(metrics.get("region_precision", 0.0)),
+            -float(metrics.get("avg_context_refs", 0.0)),
+        )
+
+    if not runs:
+        return {}
+    run = max(runs, key=sort_key)
+    metrics = run["metrics"] if isinstance(run.get("metrics"), dict) else {}
+    return {"name": run.get("name"), "source_path": run.get("source_path"), "metrics": metrics}
+
+
+def _saved_run_table_row(run: dict[str, object], baseline: dict[str, object] | None) -> dict[str, object]:
+    metrics = run.get("metrics", {})
+    base_metrics = baseline.get("metrics", {}) if baseline else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    if not isinstance(base_metrics, dict):
+        base_metrics = {}
+    keys = ["hit_at_1", "hit_at_k", "mrr", "gold_coverage", "region_precision", "avg_context_refs"]
+    row = {
+        "name": run.get("name"),
+        "source_path": run.get("source_path"),
+        "comparison_key": run.get("comparison_key"),
+        "settings": run.get("settings", {}),
+        "metrics": {key: metrics.get(key) for key in keys if key in metrics},
+    }
+    if baseline:
+        row["delta_vs_baseline"] = {
+            key: _metric_delta(metrics.get(key), base_metrics.get(key))
+            for key in keys
+            if key in metrics and key in base_metrics
+        }
+    return row
+
+
+def _metric_delta(value: object, baseline: object) -> float | None:
+    try:
+        return round(float(value) - float(baseline), 6)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compare_runs_ci_status(
+    *,
+    compatibility: dict[str, object],
+    best_hit_at_k: float,
+    min_best_hit_at_k: float | None,
+    fail_on_regression: bool,
+) -> dict[str, object]:
+    failures: list[dict[str, object]] = []
+    if compatibility.get("status") == "fail":
+        failures.append({"metric": "compatibility", "value": "mismatch", "threshold": "same_corpus_and_eval"})
+    if min_best_hit_at_k is not None and best_hit_at_k < min_best_hit_at_k:
+        failures.append({"metric": "best_hit_at_k", "value": best_hit_at_k, "threshold": min_best_hit_at_k})
+    status = "fail" if fail_on_regression and failures else "ok"
+    return {
+        "status": status,
+        "exit_code": 3 if status == "fail" else 0,
+        "thresholds": {"min_best_hit_at_k": min_best_hit_at_k},
+        "counts": {"failures": len(failures)},
+        "failures": failures,
+    }
 
 
 def _http_retriever(args):
