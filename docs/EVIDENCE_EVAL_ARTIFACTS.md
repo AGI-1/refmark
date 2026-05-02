@@ -92,3 +92,11 @@ Use these rules for research notes and CI:
 This is the main reason Refmark matters in the training experiments: the refs
 are not just labels. They are the shared coordinate system that makes retrieval,
 adaptation, model training, and regression checks inspectable in the same terms.
+
+## Existing Eval Tools
+
+Refmark evidence metrics can be logged beside answer-level metrics in tools such
+as RAGAS, LangSmith, MLflow, or internal dashboards. Use
+`export_ragas_rows(...)` when a tool expects question/answer/context rows, and
+use `refmark_evidence_metrics(...)` or `eval_tool_summary(...)` when a tool
+expects run metadata. See [Eval Tool Integrations](EVAL_TOOL_INTEGRATIONS.md).

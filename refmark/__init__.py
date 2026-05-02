@@ -54,6 +54,12 @@ from refmark.pipeline_runner import PipelineRunSummary, run_full_pipeline
 from refmark.prompt import EnrichedPrompt, build_reference_prompt
 from refmark.provenance import build_eval_provenance, file_fingerprint, validate_provenance
 from refmark.question_plan import QuestionPlanItem, build_question_plan, question_plan_to_dict
+from refmark.rag_adapters import (
+    eval_tool_summary,
+    export_ragas_rows,
+    refmark_evidence_metrics,
+    write_ragas_jsonl,
+)
 from refmark.rag_eval import (
     ContextPack,
     CorpusMap,
@@ -124,6 +130,8 @@ __all__ = [
     "discovery_map_items",
     "diagnose_results",
     "evaluate_alignment_coverage",
+    "eval_tool_summary",
+    "export_ragas_rows",
     "expand_region_context",
     "failure_heatmap",
     "file_fingerprint",
@@ -150,6 +158,7 @@ __all__ = [
     "load_workflow_config",
     "resolve_workflow_config",
     "question_plan_to_dict",
+    "refmark_evidence_metrics",
     "run_full_pipeline",
     "RefRangeScore",
     "RewardConfig",
@@ -164,5 +173,6 @@ __all__ = [
     "write_discovery_map_html",
     "write_full_pipeline_config_template",
     "write_manifest",
+    "write_ragas_jsonl",
     "__version__",
 ]

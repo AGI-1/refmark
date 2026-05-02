@@ -17,6 +17,11 @@ only affected evaluation and training examples need review.
 
 Short version: model guesses become measurable.
 
+Refmark is best read as **stable evidence references**: source regions that can
+be resolved, scored, highlighted, diffed, or marked stale. It does not replace
+your retriever, vector database, judge model, or answer evaluator. It gives
+those systems a shared address space.
+
 ## 30-Second Mental Model
 
 Given a document with addressable regions, a pipeline predicts which refs or
@@ -138,6 +143,20 @@ The stable package surface is intentionally small:
 Research demos, benchmark outputs, and training experiments are kept separate
 from the core claim. They are useful because the same refs/ranges make their
 successes and failures measurable.
+
+## Limitations
+
+- Refmark does not guarantee that a model picked the right evidence. It makes
+  chosen refs resolvable and scoreable.
+- Lifecycle benchmarks compare against a simple path/ordinal chunk baseline.
+  Other chunking, overlap, semantic matching, and registry strategies may be
+  stronger than that baseline.
+- Current PDF/DOCX support is extracted-text oriented unless a workflow stores
+  explicit page/layout provenance.
+- Stable refs still need review when evidence is rewritten, split, merged,
+  deleted, or only fuzzily matched.
+- Metrics are only as good as the region manifest and gold refs/ranges they are
+  based on.
 
 ## Quick Start
 
@@ -266,6 +285,19 @@ for name, run in runs.items():
     run.write_json(f"runs/{name}.json")
     print(name, run.metrics)
 ```
+
+Refmark can also export evidence rows and metrics for existing lifecycle tools.
+The adapter has no RAGAS/LangSmith/MLflow dependency; it produces ordinary
+records that those tools can ingest beside their own answer-quality metrics.
+
+```python
+from refmark import export_ragas_rows, refmark_evidence_metrics
+
+rows = export_ragas_rows(suite, runs["hybrid"], answers=generated_answers)
+metrics = refmark_evidence_metrics(suite, runs["hybrid"])
+```
+
+See [Eval Tool Integrations](docs/EVAL_TOOL_INTEGRATIONS.md).
 
 To use the CLI as a CI gate, keep the search index as the retriever artifact and
 optionally provide the current manifest as the lifecycle/staleness artifact:
