@@ -181,7 +181,11 @@ class CorpusMap:
         for example in examples:
             missing_refs: list[str] = []
             changed_refs: list[str] = []
-            for stable_ref in self.expand_refs(example.gold_refs):
+            refs_to_check: list[str] = []
+            for gold_ref in example.gold_refs:
+                expanded = self.expand_refs([gold_ref])
+                refs_to_check.extend(expanded if expanded else _literal_refs_from_gold([gold_ref]))
+            for stable_ref in _dedupe(refs_to_check):
                 record = by_ref.get(stable_ref)
                 if record is None:
                     missing_refs.append(stable_ref)

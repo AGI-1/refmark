@@ -312,6 +312,42 @@ python -m refmark.cli eval-index docs.refmark-index.json eval_questions.jsonl \
   -o runs/eval.json
 ```
 
+To evaluate evidence-label lifecycle across Git documentation revisions:
+
+```bash
+python -m refmark.cli lifecycle-git \
+  --repo-url https://github.com/tiangolo/fastapi.git \
+  --old-ref 0.100.0 \
+  --new-refs 0.105.0,0.110.0 \
+  --subdir docs/en/docs \
+  --work-dir examples/evidence_lifecycle_benchmark/output/git_revision_work/fastapi \
+  --output examples/evidence_lifecycle_benchmark/output/git_revision_fastapi_curve.json \
+  --summary-output examples/evidence_lifecycle_benchmark/output/git_revision_fastapi_summary.json
+
+python -m refmark.cli lifecycle-summarize \
+  examples/evidence_lifecycle_benchmark/output/git_revision_fastapi_curve.json
+```
+
+For ordinary corpus CI, validate saved labels against a new shadow manifest:
+
+```bash
+python -m refmark.cli lifecycle-validate-labels \
+  .refmark/policy_manifest.rev-b.jsonl \
+  eval_questions.rev-a.jsonl \
+  --previous-manifest .refmark/policy_manifest.rev-a.jsonl \
+  --previous-revision rev-a \
+  --current-revision rev-b \
+  --max-stale 0 \
+  --max-changed-refs 10 \
+  --max-removed-refs 0 \
+  --output runs/lifecycle_report.json
+```
+
+`lifecycle-validate-labels` exits `3` when a configured lifecycle threshold is
+exceeded. `stale_examples` are eval rows whose stored evidence hashes changed
+or disappeared; `changed_refs` and `removed_refs` come from the manifest diff
+itself and can be gated even before a full retrieval run.
+
 To score an existing retrieval service instead of the built-in BM25 index, pass
 an endpoint that accepts `{"query": "...", "top_k": 10}` and returns either
 `{"refs": ["policy:P13"]}` or `{"hits": [{"stable_ref": "policy:P13", "score": 0.9}]}`:

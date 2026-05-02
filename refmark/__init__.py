@@ -19,6 +19,7 @@ from refmark.documents import AlignmentReport, DocumentMap, align_documents, map
 from refmark.edit import apply_ref_diff
 from refmark.highlight import highlight_refs
 from refmark.languages import list_supported_languages
+from refmark.lifecycle import evaluate_git_revisions, load_summary_rows, render_summary_rows
 from refmark.metrics import RefRangeScore, RewardConfig, citation_reward, score_ref_range, summarize_scores
 from refmark.pipeline import (
     AlignmentCandidate,
@@ -130,6 +131,7 @@ __all__ = [
     "discovery_map_items",
     "diagnose_results",
     "evaluate_alignment_coverage",
+    "evaluate_git_revisions",
     "eval_tool_summary",
     "export_ragas_rows",
     "expand_region_context",
@@ -140,6 +142,7 @@ __all__ = [
     "list_supported_languages",
     "load_discovery",
     "load_full_pipeline_config",
+    "load_summary_rows",
     "map_document",
     "parse_citation_refs",
     "read_manifest",
@@ -147,6 +150,7 @@ __all__ = [
     "render_coverage_html",
     "render_coverage_report_html",
     "render_discovery_map_html",
+    "render_summary_rows",
     "repair_discovery_clusters",
     "review_discovery",
     "Refmarker",

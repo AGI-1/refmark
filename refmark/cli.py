@@ -19,6 +19,7 @@ from refmark.edit import apply_ref_diff
 from refmark.feedback import analyze_feedback, read_feedback_jsonl
 from refmark.highlight import highlight_refs, render_highlight_html, render_highlight_json, render_highlight_text
 from refmark.languages import choose_edit_chunker, choose_live_marker_format, list_supported_languages
+from refmark.lifecycle import evaluate_git_revisions, load_summary_rows, render_summary_rows
 from refmark.pipeline import (
     RegionRecord,
     align_region_records,
@@ -230,6 +231,50 @@ def main():
     feedback_parser.add_argument("--top-n", type=int, default=25, help="Maximum clusters to emit.")
     feedback_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
 
+    lifecycle_git_parser = subparsers.add_parser(
+        "lifecycle-git",
+        help="Evaluate evidence-label stability across Git documentation revisions.",
+    )
+    lifecycle_git_parser.add_argument("--repo-url", required=True, help="Git repository URL.")
+    lifecycle_git_parser.add_argument("--old-ref", required=True, help="Base Git ref/tag.")
+    lifecycle_git_parser.add_argument("--new-refs", required=True, help="Comma-separated target Git refs/tags.")
+    lifecycle_git_parser.add_argument("--subdir", required=True, help="Documentation subdirectory inside the repo.")
+    lifecycle_git_parser.add_argument("--work-dir", required=True, help="Working directory for clone/export cache.")
+    lifecycle_git_parser.add_argument("-o", "--output", required=True, help="Full JSON benchmark output path.")
+    lifecycle_git_parser.add_argument("--summary-output", default=None, help="Optional compact summary JSON rows output path.")
+    lifecycle_git_parser.add_argument("--csv-output", default=None, help="Optional compact summary CSV output path.")
+    lifecycle_git_parser.add_argument("--region-tokens", type=int, default=110)
+    lifecycle_git_parser.add_argument("--region-stride", type=int, default=110)
+    lifecycle_git_parser.add_argument("--max-files", type=int, default=0, help="Optional file cap for smoke runs.")
+
+    lifecycle_summary_parser = subparsers.add_parser(
+        "lifecycle-summarize",
+        help="Render lifecycle benchmark summary_rows as Markdown, JSON, or CSV.",
+    )
+    lifecycle_summary_parser.add_argument("inputs", nargs="+", help="Lifecycle benchmark JSON files or summary JSON arrays.")
+    lifecycle_summary_parser.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    lifecycle_summary_parser.add_argument(
+        "--columns",
+        default="",
+        help="Optional comma-separated output columns. Defaults to the standard lifecycle table.",
+    )
+    lifecycle_summary_parser.add_argument("-o", "--output", default=None, help="Optional output path. Defaults to stdout.")
+
+    lifecycle_validate_parser = subparsers.add_parser(
+        "lifecycle-validate-labels",
+        help="Validate query->gold_refs labels against a current manifest and optional previous revision.",
+    )
+    lifecycle_validate_parser.add_argument("current_manifest", help="Current region manifest JSONL.")
+    lifecycle_validate_parser.add_argument("examples", help="Eval JSONL rows with query, gold_refs, and optional source_hashes.")
+    lifecycle_validate_parser.add_argument("--previous-manifest", default=None, help="Optional previous region manifest JSONL for revision diff.")
+    lifecycle_validate_parser.add_argument("--current-revision", default=None)
+    lifecycle_validate_parser.add_argument("--previous-revision", default=None)
+    lifecycle_validate_parser.add_argument("--attach-source-hashes", action="store_true", help="Attach current hashes before validation.")
+    lifecycle_validate_parser.add_argument("--max-stale", type=int, default=None, help="Fail if stale examples exceed this count.")
+    lifecycle_validate_parser.add_argument("--max-changed-refs", type=int, default=None, help="Fail if changed refs exceed this count.")
+    lifecycle_validate_parser.add_argument("--max-removed-refs", type=int, default=None, help="Fail if removed/deleted refs exceed this count.")
+    lifecycle_validate_parser.add_argument("-o", "--output", default=None, help="Optional JSON report output path.")
+
     pack_context_parser = subparsers.add_parser(
         "pack-context",
         help="Pack refs/ranges from a manifest into an ordered evidence text bundle.",
@@ -405,6 +450,12 @@ def main():
         _handle_eval_index(args)
     elif args.command == "feedback-diagnostics":
         _handle_feedback_diagnostics(args)
+    elif args.command == "lifecycle-git":
+        _handle_lifecycle_git(args)
+    elif args.command == "lifecycle-summarize":
+        _handle_lifecycle_summarize(args)
+    elif args.command == "lifecycle-validate-labels":
+        _handle_lifecycle_validate_labels(args)
     elif args.command == "pack-context":
         _handle_pack_context(args)
     elif args.command == "question-prompt":
@@ -773,6 +824,127 @@ def _handle_feedback_diagnostics(args):
         print(f"[OK] Wrote feedback diagnostics to {args.output}", file=sys.stderr)
     else:
         print(output)
+
+
+def _handle_lifecycle_git(args):
+    new_refs = [ref.strip() for ref in args.new_refs.split(",") if ref.strip()]
+    if not new_refs:
+        print("Error: --new-refs must contain at least one Git ref.", file=sys.stderr)
+        sys.exit(1)
+    payload = evaluate_git_revisions(
+        repo_url=args.repo_url,
+        old_ref=args.old_ref,
+        new_refs=new_refs,
+        subdir=args.subdir,
+        work_dir=args.work_dir,
+        output=args.output,
+        summary_output=args.summary_output,
+        csv_output=args.csv_output,
+        region_tokens=args.region_tokens,
+        region_stride=args.region_stride,
+        max_files=args.max_files,
+    )
+    print(json.dumps(payload, indent=2))
+
+
+def _handle_lifecycle_summarize(args):
+    try:
+        rows = load_summary_rows(args.inputs)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    columns = [column.strip() for column in args.columns.split(",") if column.strip()] if args.columns else None
+    rendered = render_summary_rows(rows, columns=columns, output_format=args.format)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(rendered, encoding="utf-8")
+        print(f"[OK] Wrote lifecycle summary to {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(rendered)
+
+
+def _handle_lifecycle_validate_labels(args):
+    current = CorpusMap.from_manifest(
+        args.current_manifest,
+        revision_id=args.current_revision,
+        metadata={"manifest_path": args.current_manifest},
+    )
+    suite = EvalSuite.from_jsonl(args.examples, corpus=current, attach_source_hashes=args.attach_source_hashes)
+    validation = suite.validate_refs()
+    stale = [item.to_dict() for item in suite.stale_examples()]
+    diff_payload = None
+    if args.previous_manifest:
+        previous = CorpusMap.from_manifest(
+            args.previous_manifest,
+            revision_id=args.previous_revision,
+            metadata={"manifest_path": args.previous_manifest},
+        )
+        diff_payload = current.diff_revision(previous).to_dict()
+    ci_status = _lifecycle_ci_status(
+        stale_example_count=len(stale),
+        revision_diff=diff_payload,
+        max_stale=args.max_stale,
+        max_changed_refs=args.max_changed_refs,
+        max_removed_refs=args.max_removed_refs,
+    )
+    payload = {
+        "schema": "refmark.lifecycle_label_validation.v1",
+        "current_manifest": args.current_manifest,
+        "previous_manifest": args.previous_manifest,
+        "current_revision": args.current_revision,
+        "previous_revision": args.previous_revision,
+        "corpus": current.snapshot().to_dict(),
+        "eval_suite": suite.summary(),
+        "validation": validation,
+        "stale_examples": stale,
+        "stale_example_count": len(stale),
+        "revision_diff": diff_payload,
+        "ci_status": ci_status,
+        "status": ci_status["status"],
+    }
+    output = json.dumps(payload, indent=2)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote lifecycle label validation to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+    if payload["status"] == "fail":
+        sys.exit(3)
+
+
+def _lifecycle_ci_status(
+    *,
+    stale_example_count: int,
+    revision_diff: dict[str, object] | None,
+    max_stale: int | None,
+    max_changed_refs: int | None,
+    max_removed_refs: int | None,
+) -> dict[str, object]:
+    failures: list[dict[str, object]] = []
+    if max_stale is not None and stale_example_count > max_stale:
+        failures.append({"metric": "stale_examples", "value": stale_example_count, "threshold": max_stale})
+    changed_count = len(revision_diff.get("changed_refs", [])) if revision_diff else 0
+    removed_count = len(revision_diff.get("removed_refs", [])) if revision_diff else 0
+    if max_changed_refs is not None and changed_count > max_changed_refs:
+        failures.append({"metric": "changed_refs", "value": changed_count, "threshold": max_changed_refs})
+    if max_removed_refs is not None and removed_count > max_removed_refs:
+        failures.append({"metric": "removed_refs", "value": removed_count, "threshold": max_removed_refs})
+    return {
+        "status": "fail" if failures else "ok",
+        "exit_code": 3 if failures else 0,
+        "thresholds": {
+            "max_stale": max_stale,
+            "max_changed_refs": max_changed_refs,
+            "max_removed_refs": max_removed_refs,
+        },
+        "counts": {
+            "stale_examples": stale_example_count,
+            "changed_refs": changed_count,
+            "removed_refs": removed_count,
+        },
+        "failures": failures,
+    }
 
 
 def _handle_pack_context(args):

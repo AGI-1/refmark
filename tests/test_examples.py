@@ -197,3 +197,18 @@ def test_judge_free_rewards_example_runs():
     first = payload["rows"][0]["candidates"]
     assert first["exact"]["reward"] == 1.0
     assert first["exact"]["reward"] > first["overcite_neighbor"]["reward"] > first["wrong_location"]["reward"]
+
+
+def test_lifecycle_ci_demo_runs():
+    result = subprocess.run(
+        [sys.executable, "examples/lifecycle_ci_demo/run.py"],
+        cwd=PUBLISH_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads((PUBLISH_ROOT / "examples" / "lifecycle_ci_demo" / "output" / "lifecycle_report.json").read_text())
+    assert payload["stale_example_count"] == 1
+    assert payload["status"] == "ok"

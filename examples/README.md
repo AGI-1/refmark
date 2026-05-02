@@ -10,6 +10,7 @@ Run them from the repository root:
 python examples/citation_qa/run_eval.py
 python examples/data_smells/run.py
 python examples/judge_free_rewards/run.py
+python examples/lifecycle_ci_demo/run.py
 python examples/multidiff_demo/run.py
 python examples/pipeline_primitives/run.py
 python examples/coverage_alignment/run.py
@@ -118,6 +119,10 @@ revision pairs.
 This is the "corpus-as-test-suite over time" path: old eval labels, citations,
 metadata, and review notes should be preserved, migrated, reviewed, or marked
 stale instead of silently pointing to wrong evidence after re-chunking.
+
+`lifecycle_ci_demo` is the smaller product-shaped version: it maps two document
+revisions, validates a saved `query -> gold_refs` row, and emits a lifecycle
+report that can fail CI when stale examples exceed a configured threshold.
 
 ## Browser Page Search
 

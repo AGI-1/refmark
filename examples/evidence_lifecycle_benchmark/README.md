@@ -32,7 +32,7 @@ marked review-needed, or marked stale.
 Run from the repository root:
 
 ```bash
-python examples/evidence_lifecycle_benchmark/evaluate_git_revision_stability.py \
+python -m refmark.cli lifecycle-git \
   --repo-url https://github.com/tiangolo/fastapi.git \
   --old-ref 0.100.0 \
   --new-refs 0.105.0,0.110.0,0.115.0 \
@@ -44,7 +44,7 @@ python examples/evidence_lifecycle_benchmark/evaluate_git_revision_stability.py 
 ```
 
 ```bash
-python examples/evidence_lifecycle_benchmark/evaluate_git_revision_stability.py \
+python -m refmark.cli lifecycle-git \
   --repo-url https://github.com/django/django.git \
   --old-ref 4.2 \
   --new-refs 5.0,5.1,5.2 \
@@ -64,7 +64,7 @@ The script compares:
 To combine one or more result files into a table:
 
 ```bash
-python examples/evidence_lifecycle_benchmark/summarize_lifecycle_results.py \
+python -m refmark.cli lifecycle-summarize \
   examples/evidence_lifecycle_benchmark/output/git_revision_fastapi_curve.json \
   examples/evidence_lifecycle_benchmark/output/git_revision_django_curve.json \
   --format markdown \
