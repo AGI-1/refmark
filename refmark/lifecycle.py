@@ -21,6 +21,13 @@ DEFAULT_SUMMARY_COLUMNS = [
     "old_ref",
     "new_ref",
     "old_labels",
+    "competent_silent_drift_rate",
+    "competent_false_stale_rate",
+    "competent_review_rate",
+    "competent_preserved_rate",
+    "layered_silent_drift_rate",
+    "layered_review_rate",
+    "layered_preserved_rate",
     "refmark_auto_rate",
     "refmark_review_rate",
     "refmark_stale_rate",
@@ -99,8 +106,19 @@ def evaluate_git_revisions(
         new_regions = load_regions(new_root, region_tokens=region_tokens, region_stride=region_stride, max_files=max_files)
         stable = evaluate_stable_migration(old_regions, new_regions)
         naive = evaluate_naive_path_ordinal(old_regions, new_regions)
+        chunk_hash = evaluate_chunk_id_content_hash(old_regions, new_regions, stable)
+        source_hash = evaluate_qrels_source_hash(old_regions, new_regions, stable)
+        quote_selector = evaluate_chunk_hash_quote_selector(old_regions, new_regions, stable)
+        layered_selector = evaluate_layered_anchor_selector(old_regions, new_regions, stable)
         file_report = evaluate_file_lifecycle(old_regions, new_regions)
-        eval_lifecycle = evaluate_eval_label_lifecycle(stable, naive)
+        eval_lifecycle = evaluate_eval_label_lifecycle(
+            stable,
+            naive,
+            chunk_hash=chunk_hash,
+            source_hash=source_hash,
+            quote_selector=quote_selector,
+            layered_selector=layered_selector,
+        )
         revision_reports.append(
             {
                 "new_ref": new_ref,
@@ -110,6 +128,10 @@ def evaluate_git_revisions(
                 "file_lifecycle": file_report,
                 "stable_ref_migration": stable,
                 "naive_path_ordinal_identity": naive,
+                "chunk_id_content_hash_identity": chunk_hash,
+                "qrels_source_hash_identity": source_hash,
+                "chunk_hash_quote_selector_identity": quote_selector,
+                "refmark_layered_selector_identity": layered_selector,
                 "eval_label_lifecycle": eval_lifecycle,
             }
         )
@@ -143,6 +165,10 @@ def evaluate_git_revisions(
         "file_lifecycle": revision_reports[-1]["file_lifecycle"] if revision_reports else {},
         "stable_ref_migration": revision_reports[-1]["stable_ref_migration"] if revision_reports else {},
         "naive_path_ordinal_identity": revision_reports[-1]["naive_path_ordinal_identity"] if revision_reports else {},
+        "chunk_id_content_hash_identity": revision_reports[-1]["chunk_id_content_hash_identity"] if revision_reports else {},
+        "qrels_source_hash_identity": revision_reports[-1]["qrels_source_hash_identity"] if revision_reports else {},
+        "chunk_hash_quote_selector_identity": revision_reports[-1]["chunk_hash_quote_selector_identity"] if revision_reports else {},
+        "refmark_layered_selector_identity": revision_reports[-1]["refmark_layered_selector_identity"] if revision_reports else {},
         "eval_label_lifecycle": revision_reports[-1]["eval_label_lifecycle"] if revision_reports else {},
         "revision_reports": revision_reports,
         "summary_rows": revision_summary_rows(repo_url, old_ref, subdir, revision_reports),
@@ -150,6 +176,10 @@ def evaluate_git_revisions(
         "interpretation": [
             "stable_ref_migration matches old path-local refs to new regions by fingerprint/fuzzy text, first in the same file and then across renamed/moved files.",
             "naive_path_ordinal_identity assumes path plus ordinal region id remains valid after the revision.",
+            "chunk_id_content_hash_identity is the competent conservative baseline: same path/ordinal plus unchanged region hash, otherwise review/stale.",
+            "qrels_source_hash_identity models qrels plus source file hash: labels in changed files require review even when evidence survived.",
+            "chunk_hash_quote_selector_identity models chunk id plus content hash plus quote selector plus corpus version.",
+            "refmark_layered_selector_identity combines exact hashes, quote selectors, and similarity thresholds; ambiguous or low-confidence cases go to review.",
             "eval_label_lifecycle treats each old region as a maintained query->evidence label and estimates preserved/migrated/review/stale versus silent corruption.",
             "This is a natural Git revision benchmark over documentation files, not a synthetic mutation test.",
         ],
@@ -227,13 +257,22 @@ def fingerprint(text: str) -> str:
 def token_jaccard(a: str, b: str) -> float:
     aa = set(token.lower() for token in TOKEN_RE.findall(a))
     bb = set(token.lower() for token in TOKEN_RE.findall(b))
+    return token_set_jaccard(aa, bb)
+
+
+def token_set_jaccard(aa: set[str], bb: set[str]) -> float:
     if not aa and not bb:
         return 1.0
     return len(aa & bb) / max(len(aa | bb), 1)
 
 
+def token_set(text: str) -> set[str]:
+    return set(token.lower() for token in TOKEN_RE.findall(text))
+
+
 def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[Region]]) -> dict[str, object]:
     all_new = [region for regions in new.values() for region in regions]
+    fuzzy_index = FuzzyRegionIndex(all_new)
     new_by_path_fp = {
         path: {region.fingerprint: region for region in regions}
         for path, regions in new.items()
@@ -243,6 +282,7 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
         new_by_fp.setdefault(region.fingerprint, []).append(region)
     counts = Counter()
     examples = {"same_file_exact": [], "moved_exact": [], "fuzzy": [], "stale": []}
+    status_by_ref: dict[str, str] = {}
     total = 0
     for path, regions in old.items():
         same_file_fps = new_by_path_fp.get(path, {})
@@ -252,25 +292,33 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
             same = same_file_fps.get(region.fingerprint)
             if same:
                 counts["same_file_exact"] += 1
+                status_by_ref[region.ref] = "same_file_exact"
                 if same.ordinal != region.ordinal and len(examples["same_file_exact"]) < 6:
                     examples["same_file_exact"].append({"old_ref": region.ref, "new_ref": same.ref})
                 continue
             moved = [candidate for candidate in new_by_fp.get(region.fingerprint, []) if candidate.path != path]
             if moved:
                 counts["moved_exact"] += 1
+                status_by_ref[region.ref] = "moved_exact"
                 if len(examples["moved_exact"]) < 6:
                     examples["moved_exact"].append({"old_ref": region.ref, "new_ref": moved[0].ref})
                 continue
-            best = best_fuzzy_match(region, same_file_regions) or best_fuzzy_match(region, all_new)
+            same_file_best = fuzzy_index.best_match(region, candidates=same_file_regions)
+            global_best = fuzzy_index.best_match(region)
+            best = _best_match(same_file_best, global_best)
             if best and best[1] >= 0.82:
                 counts["fuzzy"] += 1
+                status_by_ref[region.ref] = "fuzzy"
                 if len(examples["fuzzy"]) < 6:
                     examples["fuzzy"].append({"old_ref": region.ref, "new_ref": best[0].ref, "similarity": round(best[1], 3)})
             else:
                 counts["stale"] += 1
+                status_by_ref[region.ref] = "stale"
                 if len(examples["stale"]) < 6:
                     examples["stale"].append({"old_ref": region.ref, "best_similarity": round(best[1], 3) if best else 0.0})
-    return rates(total, counts, examples)
+    report = rates(total, counts, examples)
+    report["status_by_ref"] = status_by_ref
+    return report
 
 
 def evaluate_naive_path_ordinal(old: dict[str, list[Region]], new: dict[str, list[Region]]) -> dict[str, object]:
@@ -299,7 +347,271 @@ def evaluate_naive_path_ordinal(old: dict[str, list[Region]], new: dict[str, lis
     return rates(total, counts, examples)
 
 
-def evaluate_eval_label_lifecycle(stable_report: dict[str, object], naive_report: dict[str, object]) -> dict[str, object]:
+def evaluate_chunk_id_content_hash(
+    old: dict[str, list[Region]],
+    new: dict[str, list[Region]],
+    stable_report: dict[str, object],
+) -> dict[str, object]:
+    """Conservative same chunk id + content hash baseline.
+
+    This is the first competent baseline: a label is preserved only when the
+    same path-local ordinal exists and its region content hash is unchanged.
+    Any mismatch is flagged for review/stale. That avoids silent drift but can
+    over-alert when evidence moved or changed only cosmetically.
+    """
+
+    oracle = _oracle_validity(stable_report)
+    new_by_path_ord = {
+        path: {region.ordinal: region for region in regions}
+        for path, regions in new.items()
+    }
+    counts = Counter()
+    examples = {"preserved": [], "false_stale": [], "true_stale": []}
+    total = 0
+    for path, regions in old.items():
+        same_path = new_by_path_ord.get(path, {})
+        for region in regions:
+            total += 1
+            candidate = same_path.get(region.ordinal)
+            valid = oracle.get(region.ref, False)
+            if candidate and candidate.fingerprint == region.fingerprint:
+                counts["preserved"] += 1
+                if len(examples["preserved"]) < 6:
+                    examples["preserved"].append({"old_ref": region.ref, "new_ref": candidate.ref})
+            elif valid:
+                counts["false_stale_alert"] += 1
+                if len(examples["false_stale"]) < 6:
+                    examples["false_stale"].append({"old_ref": region.ref})
+            else:
+                counts["true_stale_alert"] += 1
+                if len(examples["true_stale"]) < 6:
+                    examples["true_stale"].append({"old_ref": region.ref})
+    return rates(total, counts, examples)
+
+
+def evaluate_qrels_source_hash(
+    old: dict[str, list[Region]],
+    new: dict[str, list[Region]],
+    stable_report: dict[str, object],
+) -> dict[str, object]:
+    """qrels + source-file hash baseline.
+
+    This models an evaluator that stores stable qrels IDs plus a source file
+    hash. If a file hash changes, every label in that file is flagged. It is
+    simple and defensible, but can create high review workload for large files.
+    """
+
+    oracle = _oracle_validity(stable_report)
+    old_file_hashes = _file_fingerprints(old)
+    new_file_hashes = _file_fingerprints(new)
+    counts = Counter()
+    examples = {"preserved": [], "false_stale": [], "true_stale": []}
+    total = 0
+    for path, regions in old.items():
+        unchanged_file = old_file_hashes.get(path) == new_file_hashes.get(path)
+        for region in regions:
+            total += 1
+            valid = oracle.get(region.ref, False)
+            if unchanged_file:
+                counts["preserved"] += 1
+                if len(examples["preserved"]) < 6:
+                    examples["preserved"].append({"old_ref": region.ref})
+            elif valid:
+                counts["false_stale_alert"] += 1
+                if len(examples["false_stale"]) < 6:
+                    examples["false_stale"].append({"old_ref": region.ref})
+            else:
+                counts["true_stale_alert"] += 1
+                if len(examples["true_stale"]) < 6:
+                    examples["true_stale"].append({"old_ref": region.ref})
+    return rates(total, counts, examples)
+
+
+def evaluate_chunk_hash_quote_selector(
+    old: dict[str, list[Region]],
+    new: dict[str, list[Region]],
+    stable_report: dict[str, object],
+) -> dict[str, object]:
+    """Competent baseline: chunk id + hash + quote selector + corpus version.
+
+    This baseline keeps labels when the same path/ordinal hash still matches,
+    otherwise it tries to re-anchor using an exact normalized quote selector
+    derived from the old region. Multiple quote hits require review.
+    """
+
+    oracle = _oracle_validity(stable_report)
+    all_new = [region for regions in new.values() for region in regions]
+    new_by_path_ord = {
+        path: {region.ordinal: region for region in regions}
+        for path, regions in new.items()
+    }
+    quote_index = _quote_index(all_new)
+    counts = Counter()
+    examples = {"preserved": [], "review": [], "false_stale": [], "true_stale": [], "silent_wrong": []}
+    total = 0
+    for path, regions in old.items():
+        same_path = new_by_path_ord.get(path, {})
+        for region in regions:
+            total += 1
+            valid = oracle.get(region.ref, False)
+            candidate = same_path.get(region.ordinal)
+            if candidate and candidate.fingerprint == region.fingerprint:
+                counts["preserved"] += 1
+                if len(examples["preserved"]) < 6:
+                    examples["preserved"].append({"old_ref": region.ref, "new_ref": candidate.ref, "via": "same_chunk_hash"})
+                continue
+            quote = quote_selector(region.text)
+            quote_hits = quote_index.get(quote, []) if quote else []
+            if len(quote_hits) == 1:
+                hit = quote_hits[0]
+                if valid:
+                    counts["preserved"] += 1
+                    if len(examples["preserved"]) < 6:
+                        examples["preserved"].append({"old_ref": region.ref, "new_ref": hit.ref, "via": "quote_selector"})
+                else:
+                    counts["silent_wrong"] += 1
+                    if len(examples["silent_wrong"]) < 6:
+                        examples["silent_wrong"].append({"old_ref": region.ref, "new_ref": hit.ref})
+            elif len(quote_hits) > 1:
+                counts["review_needed"] += 1
+                if len(examples["review"]) < 6:
+                    examples["review"].append({"old_ref": region.ref, "quote_hits": len(quote_hits)})
+            elif valid:
+                counts["false_stale_alert"] += 1
+                if len(examples["false_stale"]) < 6:
+                    examples["false_stale"].append({"old_ref": region.ref})
+            else:
+                counts["true_stale_alert"] += 1
+                if len(examples["true_stale"]) < 6:
+                    examples["true_stale"].append({"old_ref": region.ref})
+    return rates(total, counts, examples)
+
+
+def evaluate_layered_anchor_selector(
+    old: dict[str, list[Region]],
+    new: dict[str, list[Region]],
+    stable_report: dict[str, object],
+    *,
+    similarity_threshold: float = 0.82,
+    same_ordinal_rewrite_threshold: float = 0.95,
+) -> dict[str, object]:
+    """Layered deterministic anchoring that borrows quote-selector tricks.
+
+    This is the vNext-style safety baseline: preserve exact same path/ordinal
+    hashes first, then accept a unique quote hit only when the whole region is
+    still similar enough. A conservative same-path/same-ordinal rewrite gate
+    catches common documentation updates when the quote still points at the
+    same local chunk. Low-confidence, ambiguous, and split-looking cases are
+    review-needed rather than silently accepted.
+    """
+
+    oracle = _oracle_validity(stable_report)
+    all_new = [region for regions in new.values() for region in regions]
+    new_by_path_ord = {
+        path: {region.ordinal: region for region in regions}
+        for path, regions in new.items()
+    }
+    quote_index = _quote_index(all_new)
+    counts = Counter()
+    examples = {"preserved": [], "review": [], "true_stale": [], "silent_wrong": []}
+    total = 0
+    for path, regions in old.items():
+        same_path = new_by_path_ord.get(path, {})
+        for region in regions:
+            total += 1
+            valid = oracle.get(region.ref, False)
+            candidate = same_path.get(region.ordinal)
+            if candidate and candidate.fingerprint == region.fingerprint:
+                counts["preserved"] += 1
+                if len(examples["preserved"]) < 6:
+                    examples["preserved"].append({"old_ref": region.ref, "new_ref": candidate.ref, "via": "same_chunk_hash"})
+                continue
+
+            quote = quote_selector(region.text)
+            quote_hits = quote_index.get(quote, []) if quote else []
+            if candidate:
+                same_ordinal_similarity = token_jaccard(region.text, candidate.text)
+                short_quote = quote_selector(region.text, tokens=8)
+                same_ordinal_quote_match = bool(short_quote and quote_selector(candidate.text, tokens=8) == short_quote)
+                if same_ordinal_quote_match and same_ordinal_similarity >= same_ordinal_rewrite_threshold:
+                    if valid:
+                        counts["preserved"] += 1
+                        if len(examples["preserved"]) < 6:
+                            examples["preserved"].append(
+                                {
+                                    "old_ref": region.ref,
+                                    "new_ref": candidate.ref,
+                                    "via": "same_ordinal_quote_rewrite",
+                                    "similarity": round(same_ordinal_similarity, 3),
+                                }
+                            )
+                    else:
+                        counts["silent_wrong"] += 1
+                        if len(examples["silent_wrong"]) < 6:
+                            examples["silent_wrong"].append(
+                                {
+                                    "old_ref": region.ref,
+                                    "new_ref": candidate.ref,
+                                    "via": "same_ordinal_quote_rewrite",
+                                    "similarity": round(same_ordinal_similarity, 3),
+                                }
+                            )
+                    continue
+            if len(quote_hits) == 1:
+                hit = quote_hits[0]
+                similarity = token_jaccard(region.text, hit.text)
+                if similarity >= similarity_threshold:
+                    if valid:
+                        counts["preserved"] += 1
+                        if len(examples["preserved"]) < 6:
+                            examples["preserved"].append(
+                                {
+                                    "old_ref": region.ref,
+                                    "new_ref": hit.ref,
+                                    "via": "quote_selector_similarity",
+                                    "similarity": round(similarity, 3),
+                                }
+                            )
+                    else:
+                        counts["silent_wrong"] += 1
+                        if len(examples["silent_wrong"]) < 6:
+                            examples["silent_wrong"].append({"old_ref": region.ref, "new_ref": hit.ref, "similarity": round(similarity, 3)})
+                elif valid:
+                    counts["review_needed"] += 1
+                    if len(examples["review"]) < 6:
+                        examples["review"].append(
+                            {
+                                "old_ref": region.ref,
+                                "candidate_ref": hit.ref,
+                                "reason": "quote_hit_below_similarity_threshold",
+                                "similarity": round(similarity, 3),
+                            }
+                        )
+                else:
+                    counts["true_stale_alert"] += 1
+                    if len(examples["true_stale"]) < 6:
+                        examples["true_stale"].append({"old_ref": region.ref})
+            elif valid:
+                counts["review_needed"] += 1
+                if len(examples["review"]) < 6:
+                    reason = "ambiguous_quote_selector" if len(quote_hits) > 1 else "no_quote_selector_hit"
+                    examples["review"].append({"old_ref": region.ref, "reason": reason, "quote_hits": len(quote_hits)})
+            else:
+                counts["true_stale_alert"] += 1
+                if len(examples["true_stale"]) < 6:
+                    examples["true_stale"].append({"old_ref": region.ref})
+    return rates(total, counts, examples)
+
+
+def evaluate_eval_label_lifecycle(
+    stable_report: dict[str, object],
+    naive_report: dict[str, object],
+    *,
+    chunk_hash: dict[str, object] | None = None,
+    source_hash: dict[str, object] | None = None,
+    quote_selector: dict[str, object] | None = None,
+    layered_selector: dict[str, object] | None = None,
+) -> dict[str, object]:
     total = int(stable_report["total"])
     stable_counts = Counter(stable_report["counts"])
     naive_counts = Counter(naive_report["counts"])
@@ -336,6 +648,27 @@ def evaluate_eval_label_lifecycle(stable_report: dict[str, object], naive_report
             "naive_unknown_requires_audit": total - naive_missing,
             "review_workload_reduction_vs_audit_existing_labels": round(1.0 - ((review_needed + stale) / max(total - naive_missing, 1)), 4),
         },
+        "method_comparison": {
+            "chunk_id_only": _method_comparison_row(
+                total=total,
+                silent_drift=naive_silent_wrong,
+                false_stale=0,
+                review=0,
+                preserved=naive_correct,
+            ),
+            "chunk_id_content_hash": _baseline_method_row(total, chunk_hash or {}),
+            "qrels_source_hash": _baseline_method_row(total, source_hash or {}),
+            "chunk_hash_quote_selector": _baseline_method_row(total, quote_selector or {}),
+            "refmark_layered_selector": _baseline_method_row(total, layered_selector or {}),
+            "refmark": _method_comparison_row(
+                total=total,
+                silent_drift=0,
+                false_stale=0,
+                review=review_needed,
+                preserved=preserved,
+                stale=stale,
+            ),
+        },
     }
 
 
@@ -349,6 +682,34 @@ def evaluate_file_lifecycle(old: dict[str, list[Region]], new: dict[str, list[Re
     }
 
 
+def _oracle_validity(stable_report: dict[str, object]) -> dict[str, bool]:
+    statuses = dict(stable_report.get("status_by_ref", {}))
+    return {ref: status != "stale" for ref, status in statuses.items()}
+
+
+def _file_fingerprints(regions_by_path: dict[str, list[Region]]) -> dict[str, str]:
+    return {
+        path: hashlib.sha256("\n".join(region.fingerprint for region in regions).encode("utf-8")).hexdigest()[:16]
+        for path, regions in regions_by_path.items()
+    }
+
+
+def quote_selector(text: str, *, tokens: int = 20) -> str:
+    normalized = [token.lower() for token in TOKEN_RE.findall(text)]
+    if not normalized:
+        return ""
+    return " ".join(normalized[: min(tokens, len(normalized))])
+
+
+def _quote_index(regions: list[Region]) -> dict[str, list[Region]]:
+    index: dict[str, list[Region]] = {}
+    for region in regions:
+        quote = quote_selector(region.text)
+        if quote:
+            index.setdefault(quote, []).append(region)
+    return index
+
+
 def best_fuzzy_match(region: Region, candidates: list[Region]) -> tuple[Region, float] | None:
     best = None
     for candidate in candidates:
@@ -356,6 +717,102 @@ def best_fuzzy_match(region: Region, candidates: list[Region]) -> tuple[Region, 
         if best is None or sim > best[1]:
             best = (candidate, sim)
     return best
+
+
+class FuzzyRegionIndex:
+    """Token index for high-threshold region similarity checks.
+
+    The lifecycle benchmark uses Jaccard >= 0.82 as a conservative fuzzy
+    migration signal. A valid candidate must share at least one token and have a
+    roughly compatible token-set size, so we can avoid comparing every old
+    region against every new region on large corpora.
+    """
+
+    def __init__(self, regions: list[Region], *, threshold: float = 0.82) -> None:
+        self.threshold = threshold
+        self.tokens_by_region = {region: token_set(region.text) for region in regions}
+        self.by_token: dict[str, list[Region]] = {}
+        for region, tokens in self.tokens_by_region.items():
+            for token in tokens:
+                self.by_token.setdefault(token, []).append(region)
+
+    def best_match(self, region: Region, *, candidates: list[Region] | None = None) -> tuple[Region, float] | None:
+        query_tokens = token_set(region.text)
+        if candidates is None:
+            candidate_pool = self._candidate_pool(query_tokens)
+        else:
+            candidate_pool = candidates
+        if not query_tokens and not candidate_pool:
+            return None
+        query_size = len(query_tokens)
+        min_size = int(query_size * self.threshold)
+        max_size = int(query_size / self.threshold) + 1 if self.threshold else query_size
+        best: tuple[Region, float] | None = None
+        for candidate in candidate_pool:
+            candidate_tokens = self.tokens_by_region.get(candidate)
+            if candidate_tokens is None:
+                candidate_tokens = token_set(candidate.text)
+            size = len(candidate_tokens)
+            if query_tokens and (size < min_size or size > max_size):
+                continue
+            sim = token_set_jaccard(query_tokens, candidate_tokens)
+            if best is None or sim > best[1]:
+                best = (candidate, sim)
+        return best
+
+    def _candidate_pool(self, query_tokens: set[str]) -> list[Region]:
+        if not query_tokens:
+            return list(self.tokens_by_region)
+        seen: set[Region] = set()
+        pool: list[Region] = []
+        for token in query_tokens:
+            for region in self.by_token.get(token, []):
+                if region not in seen:
+                    seen.add(region)
+                    pool.append(region)
+        return pool
+
+
+def _best_match(*matches: tuple[Region, float] | None) -> tuple[Region, float] | None:
+    candidates = [match for match in matches if match is not None]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda match: match[1])
+
+
+def _method_comparison_row(
+    *,
+    total: int,
+    silent_drift: int,
+    false_stale: int,
+    review: int,
+    preserved: int,
+    stale: int = 0,
+) -> dict[str, object]:
+    return {
+        "silent_drift": silent_drift,
+        "false_stale_alerts": false_stale,
+        "human_review_workload": review + stale + false_stale,
+        "valid_evals_preserved": preserved,
+        "rates": {
+            "silent_drift": round(silent_drift / max(total, 1), 4),
+            "false_stale_alerts": round(false_stale / max(total, 1), 4),
+            "human_review_workload": round((review + stale + false_stale) / max(total, 1), 4),
+            "valid_evals_preserved": round(preserved / max(total, 1), 4),
+        },
+    }
+
+
+def _baseline_method_row(total: int, report: dict[str, object]) -> dict[str, object]:
+    counts = Counter(report.get("counts", {}))
+    return _method_comparison_row(
+        total=total,
+        silent_drift=counts["silent_wrong"],
+        false_stale=counts["false_stale_alert"],
+        review=counts["review_needed"],
+        stale=counts["true_stale_alert"],
+        preserved=counts["preserved"],
+    )
 
 
 def rates(total: int, counts: Counter, examples: dict[str, list]) -> dict[str, object]:
@@ -381,6 +838,11 @@ def revision_summary_rows(
         refmark = dict(lifecycle["refmark"])
         naive_lifecycle = dict(lifecycle["naive"])
         workload = dict(lifecycle["estimated_review_workload"])
+        method_comparison = dict(lifecycle.get("method_comparison", {}))
+        competent = dict(method_comparison.get("chunk_hash_quote_selector", {}))
+        competent_rates = dict(competent.get("rates", {}))
+        layered = dict(method_comparison.get("refmark_layered_selector", {}))
+        layered_rates = dict(layered.get("rates", {}))
         rows.append(
             {
                 "repo_url": repo_url,
@@ -390,6 +852,13 @@ def revision_summary_rows(
                 "old_labels": lifecycle["total_labels"],
                 "new_regions": report["new_regions"],
                 "new_tokens": report["new_tokens"],
+                "competent_silent_drift_rate": competent_rates.get("silent_drift", 0.0),
+                "competent_false_stale_rate": competent_rates.get("false_stale_alerts", 0.0),
+                "competent_review_rate": competent_rates.get("human_review_workload", 0.0),
+                "competent_preserved_rate": competent_rates.get("valid_evals_preserved", 0.0),
+                "layered_silent_drift_rate": layered_rates.get("silent_drift", 0.0),
+                "layered_review_rate": layered_rates.get("human_review_workload", 0.0),
+                "layered_preserved_rate": layered_rates.get("valid_evals_preserved", 0.0),
                 "refmark_auto_rate": _rate(refmark, "auto_preserved_or_migrated"),
                 "refmark_review_rate": _rate(refmark, "review_needed_fuzzy"),
                 "refmark_stale_rate": _rate(refmark, "stale_or_deleted"),

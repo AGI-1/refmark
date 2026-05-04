@@ -102,6 +102,39 @@ Limit:
   may do better. The evidence supports the need for lifecycle validation, not a
   universal win over every possible chunking scheme.
 
+The stronger five-corpus lifecycle benchmark now includes competent baselines:
+chunk id plus content hash, qrels/source-file hash, chunk hash plus quote
+selector, and a Refmark layered selector. In that aggregate, the exact Refmark
+migration layer was more conservative than the quote-selector baseline, but the
+layered Refmark selector borrowed the useful quote-selector signal while keeping
+unsafe cases explicit. It preserved slightly more labels than the quote-selector
+baseline (`26,520` vs `26,389`) with no observed silent drift under the current
+migration oracle, at the cost of a slightly larger explicit review queue
+(`48.6%` vs `48.1%`).
+
+This oracle caveat is central: the aggregate benchmark still uses Refmark's
+exact/fuzzy migration heuristic to decide whether old evidence remains valid.
+The benchmark is therefore strong evidence about lifecycle instrumentation and
+method tradeoffs, not final independent proof of semantic correctness.
+
+An LLM-adjudicated sample of 200 disagreement/review cards further suggests
+that Refmark's review queue is meaningful rather than just conservative noise.
+Most review-needed/fuzzy cases were judged as valid rewritten or moved
+evidence, while quote-selector silent-drift candidates included stale and
+split-support cases. This points to the next improvement target: increase safe
+auto-preservation from the review queue without reintroducing silent drift.
+
+A smaller Codex-filled adjudication pass over the top 60 review cards was used
+as a calibration aid, not as independent human evidence. It found 46/60
+preservable labels (`valid_unchanged`, `valid_moved`, or `valid_rewritten`),
+7 stale labels, 3 split-support labels, and 4 ambiguous labels. The split was
+especially useful for rule design: 15/16 Refmark fuzzy/layered review cases
+looked safely preservable, while 44 quote-selector silent-drift candidates
+contained 6 stale, 3 split-support, and 4 ambiguous cases. That supports the
+current vNext direction: borrow quote-selector recovery, but gate it through
+Refmark lifecycle state and keep split evidence as an explicit range-repair
+state.
+
 See [Evidence Lifecycle Benchmark](EVIDENCE_LIFECYCLE_BENCHMARK.md).
 
 ## Retrieval/Evaluation Evidence

@@ -106,6 +106,10 @@ flowchart LR
   address space enables; they are not a separate core product surface.
 - **Human-in-the-loop audits:** render highlighted source regions so reviewers
   inspect what a model actually cited.
+- **Ephemeral document workflows:** create a disposable address map for a
+  one-off `.md`, `.txt`, `.docx`, or extracted-text `.pdf` task, let a model
+  propose ref-addressed edits, and apply bounded changes instead of a blind
+  full-document rewrite.
 - **Bounded code edits:** target stable same-file regions instead of line
   numbers when applying multi-region model patches. Treat this as a separate
   code-editing workflow, not the core RAG claim.
@@ -143,6 +147,8 @@ The stable package surface is intentionally small:
   corpus overview maps and discovery-agent repair loops.
 - `highlight`, `parse_citation_refs`, and citation scoring helpers for
   reviewable model citations.
+- `ephemeral-map` / `ephemeral-apply` for disposable one-off document maps and
+  bounded ref-addressed replacements.
 - `Refmarker` for pass-through marking and shadow registries.
 - `apply_ref_diff` and the MCP server for bounded same-file multi-region edits.
 
@@ -159,9 +165,10 @@ diagnostics, integration adapters, and bounded ref-based citation/edit tools.
 
 - Refmark does not guarantee that a model picked the right evidence. It makes
   chosen refs resolvable and scoreable.
-- Lifecycle benchmarks compare against a simple path/ordinal chunk baseline.
-  Other chunking, overlap, semantic matching, and registry strategies may be
-  stronger than that baseline.
+- Lifecycle benchmark claims are preliminary. The current aggregate oracle is
+  Refmark's exact/fuzzy migration heuristic, so "zero observed silent drift"
+  means zero observed silent drift under that migration oracle. Human-reviewed
+  disagreement slices are still required for publication-grade validation.
 - Current PDF/DOCX support is extracted-text oriented unless a workflow stores
   explicit page/layout provenance.
 - Stable refs still need review when evidence is rewritten, split, merged,

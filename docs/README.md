@@ -39,6 +39,8 @@ the research history.
 ## Other Surfaces
 
 - [Getting Started](GETTING_STARTED.md): install variants and basic CLI checks.
+- [Ephemeral Mode](EPHEMERAL_MODE.md): disposable refs for one-off document
+  review, citation cleanup, and bounded edits.
 - [MCP Usage](MCP_USAGE.md): same-file region editing via MCP.
 - [Document Provenance](DOCUMENT_PROVENANCE.md): PDF/DOCX extracted-text
   boundaries and provenance caveats.

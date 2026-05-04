@@ -3,6 +3,7 @@
 from refmark.adapt_plan import AdaptationAction, AdaptationPlan, build_adaptation_plan, read_smell_report
 from refmark.citations import CitationRef, parse_citation_refs, validate_citation_refs
 from refmark.core import inject, strip
+from refmark.ephemeral import apply_ephemeral_edits, build_ephemeral_map
 from refmark.data_smells import DataSmell, DataSmellReport, build_data_smell_report
 from refmark.discovery import (
     DiscoveryContextCard,
@@ -156,6 +157,8 @@ __all__ = [
     "file_fingerprint",
     "highlight_refs",
     "inject",
+    "apply_ephemeral_edits",
+    "build_ephemeral_map",
     "list_supported_languages",
     "load_discovery",
     "load_full_pipeline_config",

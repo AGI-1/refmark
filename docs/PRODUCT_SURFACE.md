@@ -10,6 +10,7 @@ centroid preselectors are consumers of that surface.
 - an evidence-evaluation layer for retrieval and citations;
 - a lifecycle layer for stale/changed evidence labels;
 - a review layer for data smells and adaptation plans;
+- an ephemeral address layer for one-off document/citation/edit tasks;
 - a small set of CLI/API entry points that can attach to existing RAG stacks.
 
 ## What Refmark Is Not
@@ -34,6 +35,7 @@ centroid preselectors are consumers of that surface.
 | Adaptation planning | `adapt-plan`, `eval-index --adapt-plan-output` | review-required adaptation actions | You want suggestions for metadata, stale-label, range, or gating review | Product path |
 | Eval-tool exports | `export_ragas_rows`, `export_deepeval_cases`, `export_trace_events` | dependency-free rows/cases/traces with ref metadata | You want Ragas/DeepEval/Phoenix/Langfuse-style tools to carry evidence refs | Product path |
 | Citation scoring | `parse_citation_refs`, metrics helpers, `highlight` | exact/overlap/cover/overcite/undercite scores and snippets | A model returns refs and you need deterministic evidence scoring | Product path |
+| Ephemeral document edits | `ephemeral-map`, `ephemeral-apply`, `build_ephemeral_map`, `apply_ephemeral_edits` | temporary marked view and bounded patched output | You need a disposable address layer for proofreading, contract edits, citation cleanup, or one-off document review | New bounded product path |
 | Shadow mapping | `Refmarker`, `map --marked-dir`, manifest JSONL | external registry and optional marked copies | You do not want to mutate source files but need addressable regions | Product path |
 | MCP edits | `apply_ref_diff`, MCP server tools | bounded same-file region edits | You want agent/code edits addressed by refs instead of drifting line numbers | Bounded product path |
 | Discovery maps | `discover`, `discovery-map`, `repair-discovery-clusters` | corpus overview cards/maps and repairable clusters | You need review/navigation context for a corpus before question generation | Early product/review tool |

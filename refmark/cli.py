@@ -17,6 +17,7 @@ from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
 from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, repair_discovery_clusters, review_discovery, write_discovery
 from refmark.discovery_heatmap import write_discovery_map_html
+from refmark.ephemeral import apply_ephemeral_edits, build_ephemeral_map, edits_from_json
 from refmark.edit import apply_ref_diff
 from refmark.feedback import analyze_feedback, read_feedback_jsonl
 from refmark.highlight import highlight_refs, render_highlight_html, render_highlight_json, render_highlight_text
@@ -142,6 +143,30 @@ def main():
     align_parser.add_argument("--marked-target", default=None, help="Optional marked target text output path.")
     align_parser.add_argument("--no-expanded-evidence", action="store_true", help="Omit expanded evidence cards from coverage HTML.")
     align_parser.add_argument("--layout", choices=["side-by-side", "stacked"], default="side-by-side", help="HTML report layout.")
+
+    ephemeral_map_parser = subparsers.add_parser(
+        "ephemeral-map",
+        help="Create a disposable marked view and address map for one-off document work.",
+    )
+    ephemeral_map_parser.add_argument("file", help="Input document path.")
+    ephemeral_map_parser.add_argument("--doc-id", default=None, help="Optional document id for refs.")
+    ephemeral_map_parser.add_argument("--json", action="store_true", help="Write a JSON payload instead of marked text.")
+    ephemeral_map_parser.add_argument("--manifest", default=None, help="Optional transient manifest JSONL output.")
+    ephemeral_map_parser.add_argument("--instructions", action="store_true", help="Prepend edit instructions before marked text.")
+    ephemeral_map_parser.add_argument("-o", "--output", default=None, help="Optional output path. Defaults to stdout.")
+    _add_workflow_config_args(ephemeral_map_parser)
+
+    ephemeral_apply_parser = subparsers.add_parser(
+        "ephemeral-apply",
+        help="Apply disposable ref-addressed replacement edits to a document.",
+    )
+    ephemeral_apply_parser.add_argument("file", help="Input document path.")
+    ephemeral_apply_parser.add_argument("-o", "--output", required=True, help="Patched output path.")
+    ephemeral_apply_parser.add_argument("--edits-json", default=None, help="Inline JSON edit array or object with edits.")
+    ephemeral_apply_parser.add_argument("--edits-file", default=None, help="Path to JSON edit array or object with edits.")
+    ephemeral_apply_parser.add_argument("--doc-id", default=None, help="Optional document id used while mapping.")
+    ephemeral_apply_parser.add_argument("--dry-run", action="store_true", help="Validate without writing output.")
+    _add_workflow_config_args(ephemeral_apply_parser)
 
     build_index_parser = subparsers.add_parser(
         "build-index",
@@ -518,6 +543,10 @@ def main():
         _handle_expand(args)
     elif args.command == "align":
         _handle_align(args)
+    elif args.command == "ephemeral-map":
+        _handle_ephemeral_map(args)
+    elif args.command == "ephemeral-apply":
+        _handle_ephemeral_apply(args)
     elif args.command == "build-index":
         _handle_build_index(args)
     elif args.command == "search-index":
@@ -2115,6 +2144,59 @@ def _handle_align(args):
         Path(args.marked_target).write_text(report.target.marked_text, encoding="utf-8")
         print(f"[OK] Wrote marked target to {args.marked_target}", file=sys.stderr)
     print(json.dumps([[candidate.to_dict() for candidate in row] for row in alignments], indent=2))
+
+
+def _handle_ephemeral_map(args):
+    path = Path(args.file)
+    if not path.exists():
+        print(f"Error: File '{path}' not found.", file=sys.stderr)
+        sys.exit(1)
+    config = _workflow_config_from_args(args)
+    result = build_ephemeral_map(path, config=config, doc_id=args.doc_id)
+    if args.manifest:
+        result.document.write_manifest(args.manifest)
+        print(f"[OK] Wrote transient manifest with {len(result.document.records)} regions to {args.manifest}", file=sys.stderr)
+    if args.json:
+        output = json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
+    else:
+        parts = []
+        if args.instructions:
+            parts.extend([result.instructions, ""])
+        parts.append(result.document.marked_text)
+        output = "\n".join(parts)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote ephemeral map for {path} to {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(output)
+
+
+def _handle_ephemeral_apply(args):
+    if bool(args.edits_json) == bool(args.edits_file):
+        print("Error: Provide exactly one of --edits-json or --edits-file.", file=sys.stderr)
+        sys.exit(1)
+    payload_text = args.edits_json
+    if args.edits_file:
+        payload_text = Path(args.edits_file).read_text(encoding="utf-8-sig")
+    try:
+        edits = edits_from_json(payload_text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"Error: Invalid edit payload: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    config = _workflow_config_from_args(args)
+    result = apply_ephemeral_edits(
+        args.file,
+        edits,
+        output=args.output,
+        config=config,
+        doc_id=args.doc_id,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if not result.get("ok"):
+        sys.exit(1)
 
 
 def _handle_smoke(args):

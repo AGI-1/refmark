@@ -3,7 +3,19 @@ import subprocess
 import sys
 
 from refmark.pipeline import RegionRecord, write_manifest
-from refmark.lifecycle import load_summary_rows, render_summary_rows
+from refmark.lifecycle import (
+    Region,
+    evaluate_chunk_hash_quote_selector,
+    evaluate_chunk_id_content_hash,
+    evaluate_eval_label_lifecycle,
+    evaluate_layered_anchor_selector,
+    evaluate_naive_path_ordinal,
+    evaluate_qrels_source_hash,
+    evaluate_stable_migration,
+    FuzzyRegionIndex,
+    load_summary_rows,
+    render_summary_rows,
+)
 from refmark.rag_eval import CorpusMap, EvalSuite
 
 
@@ -156,6 +168,85 @@ def test_lifecycle_validate_labels_cli_reports_stale_examples(tmp_path):
     assert payload["revision_diff"]["changed_refs"] == ["policy:P01"]
 
 
+def test_layered_selector_preserves_same_ordinal_rewrite_with_quote() -> None:
+    old = {
+        "docs/page.md": [
+            Region(
+                path="docs/page.md",
+                ref="docs/page.md:P001",
+                ordinal=1,
+                text="Refund policy overview. Customers can return items within 30 days. Use the portal.",
+                fingerprint="old",
+            )
+        ]
+    }
+    new = {
+        "docs/page.md": [
+            Region(
+                path="docs/page.md",
+                ref="docs/page.md:P001",
+                ordinal=1,
+                text="Refund policy overview. Customers can return items within 45 days. Use the portal or email support.",
+                fingerprint="new",
+            )
+        ]
+    }
+    stable = {
+        "total": 1,
+        "counts": {"fuzzy": 1},
+        "status_by_ref": {"docs/page.md:P001": "fuzzy"},
+    }
+
+    report = evaluate_layered_anchor_selector(
+        old,
+        new,
+        stable,
+        same_ordinal_rewrite_threshold=0.50,
+    )
+
+    assert report["counts"]["preserved"] == 1
+    assert report["examples"]["preserved"][0]["via"] == "same_ordinal_quote_rewrite"
+
+
+def test_layered_selector_reviews_low_similarity_same_ordinal_rewrite() -> None:
+    old = {
+        "docs/page.md": [
+            Region(
+                path="docs/page.md",
+                ref="docs/page.md:P001",
+                ordinal=1,
+                text="Refund policy overview. Customers can return items within 30 days. Use the portal.",
+                fingerprint="old",
+            )
+        ]
+    }
+    new = {
+        "docs/page.md": [
+            Region(
+                path="docs/page.md",
+                ref="docs/page.md:P001",
+                ordinal=1,
+                text=(
+                    "Refund policy overview. This page now describes fraud review, manual approvals, "
+                    "warehouse exceptions, and escalation queues for enterprise accounts."
+                ),
+                fingerprint="new",
+            )
+        ]
+    }
+    stable = {
+        "total": 1,
+        "counts": {"fuzzy": 1},
+        "status_by_ref": {"docs/page.md:P001": "fuzzy"},
+    }
+
+    report = evaluate_layered_anchor_selector(old, new, stable)
+
+    assert report["counts"].get("preserved", 0) == 0
+    assert report["counts"]["review_needed"] == 1
+    assert report["examples"]["review"][0]["reason"] == "no_quote_selector_hit"
+
+
 def test_manifest_diff_cli_reports_revision_churn_and_affected_examples(tmp_path):
     previous_manifest = tmp_path / "previous.jsonl"
     current_manifest = tmp_path / "current.jsonl"
@@ -256,3 +347,164 @@ def test_lifecycle_primitives_detect_changed_removed_and_stale_examples():
     assert diff.removed_refs == ["policy:P02"]
     assert [item.changed_refs for item in stale] == [["policy:P01"], []]
     assert [item.missing_refs for item in stale] == [[], ["policy:P02"]]
+
+
+def test_lifecycle_competent_baselines_compare_moved_evidence():
+    old = {
+        "guide.md": [
+            Region("guide.md", "guide.md:P001", 1, "Refunds are available for thirty days after purchase.", "h-refund"),
+            Region("guide.md", "guide.md:P002", 2, "Shipping uses tracked parcel delivery for every order.", "h-ship"),
+        ]
+    }
+    new = {
+        "policy.md": [
+            Region("policy.md", "policy.md:P001", 1, "Refunds are available for thirty days after purchase.", "h-refund"),
+        ],
+        "guide.md": [
+            Region("guide.md", "guide.md:P001", 1, "Shipping uses tracked parcel delivery for every order.", "h-ship"),
+        ],
+    }
+
+    stable = evaluate_stable_migration(old, new)
+    naive = evaluate_naive_path_ordinal(old, new)
+    chunk_hash = evaluate_chunk_id_content_hash(old, new, stable)
+    source_hash = evaluate_qrels_source_hash(old, new, stable)
+    quote_selector = evaluate_chunk_hash_quote_selector(old, new, stable)
+    layered_selector = evaluate_layered_anchor_selector(old, new, stable)
+    lifecycle = evaluate_eval_label_lifecycle(
+        stable,
+        naive,
+        chunk_hash=chunk_hash,
+        source_hash=source_hash,
+        quote_selector=quote_selector,
+        layered_selector=layered_selector,
+    )
+
+    assert stable["counts"]["moved_exact"] == 1
+    assert naive["counts"]["wrong_same_id"] == 1
+    assert chunk_hash["counts"]["false_stale_alert"] == 2
+    assert source_hash["counts"]["false_stale_alert"] == 2
+    assert quote_selector["counts"]["preserved"] == 2
+    assert layered_selector["counts"]["preserved"] == 2
+    assert lifecycle["method_comparison"]["chunk_id_only"]["silent_drift"] == 1
+    assert lifecycle["method_comparison"]["chunk_id_content_hash"]["false_stale_alerts"] == 2
+    assert lifecycle["method_comparison"]["chunk_hash_quote_selector"]["valid_evals_preserved"] == 2
+    assert lifecycle["method_comparison"]["refmark_layered_selector"]["valid_evals_preserved"] == 2
+    assert lifecycle["method_comparison"]["refmark"]["valid_evals_preserved"] == 2
+
+
+def test_quote_selector_requires_review_for_ambiguous_quote_hits():
+    old = {
+        "guide.md": [
+            Region("guide.md", "guide.md:P001", 1, "Refund policy overview allows returns after approval.", "h-old"),
+        ]
+    }
+    new = {
+        "policy-a.md": [
+            Region("policy-a.md", "policy-a.md:P001", 1, "Refund policy overview allows returns after approval.", "h-a"),
+        ],
+        "policy-b.md": [
+            Region("policy-b.md", "policy-b.md:P001", 1, "Refund policy overview allows returns after approval.", "h-b"),
+        ]
+    }
+    stable = {
+        "total": 1,
+        "counts": {"fuzzy": 1},
+        "status_by_ref": {"guide.md:P001": "fuzzy"},
+    }
+
+    quote_selector = evaluate_chunk_hash_quote_selector(old, new, stable)
+    layered_selector = evaluate_layered_anchor_selector(old, new, stable)
+
+    assert quote_selector["counts"]["review_needed"] == 1
+    assert layered_selector["counts"]["review_needed"] == 1
+
+
+def test_source_hash_baseline_preserves_unchanged_file_and_flags_changed_file():
+    old = {
+        "same.md": [Region("same.md", "same.md:P001", 1, "Stable text.", "h-same")],
+        "changed.md": [Region("changed.md", "changed.md:P001", 1, "Moved text.", "h-moved")],
+    }
+    new = {
+        "same.md": [Region("same.md", "same.md:P001", 1, "Stable text.", "h-same")],
+        "changed.md": [Region("changed.md", "changed.md:P001", 1, "Different local text.", "h-other")],
+        "moved.md": [Region("moved.md", "moved.md:P001", 1, "Moved text.", "h-moved")],
+    }
+    stable = evaluate_stable_migration(old, new)
+
+    source_hash = evaluate_qrels_source_hash(old, new, stable)
+    chunk_hash = evaluate_chunk_id_content_hash(old, new, stable)
+
+    assert source_hash["counts"]["preserved"] == 1
+    assert source_hash["counts"]["false_stale_alert"] == 1
+    assert chunk_hash["counts"]["preserved"] == 1
+    assert chunk_hash["counts"]["false_stale_alert"] == 1
+
+
+def test_fuzzy_region_index_matches_expected_global_candidate():
+    old_region = Region(
+        "guide.md",
+        "guide.md:P001",
+        1,
+        "Refund requests must include the receipt number and be filed within thirty days.",
+        "h-old",
+    )
+    decoy = Region(
+        "guide.md",
+        "guide.md:P001",
+        1,
+        "Shipping requests must include a tracking number and delivery address.",
+        "h-decoy",
+    )
+    moved = Region(
+        "policy.md",
+        "policy.md:P001",
+        1,
+        "Refund requests must include the receipt number and be filed within thirty calendar days.",
+        "h-moved",
+    )
+
+    best = FuzzyRegionIndex([decoy, moved]).best_match(old_region)
+
+    assert best is not None
+    assert best[0] == moved
+    assert best[1] >= 0.82
+
+
+def test_stable_migration_prefers_global_fuzzy_over_weak_same_file_candidate():
+    old = {
+        "guide.md": [
+            Region(
+                "guide.md",
+                "guide.md:P001",
+                1,
+                "Refund requests must include the receipt number and be filed within thirty days.",
+                "h-old",
+            )
+        ]
+    }
+    new = {
+        "guide.md": [
+            Region(
+                "guide.md",
+                "guide.md:P001",
+                1,
+                "Shipping requests must include a tracking number and delivery address.",
+                "h-decoy",
+            )
+        ],
+        "policy.md": [
+            Region(
+                "policy.md",
+                "policy.md:P001",
+                1,
+                "Refund requests must include the receipt number and be filed within thirty calendar days.",
+                "h-moved",
+            )
+        ],
+    }
+
+    stable = evaluate_stable_migration(old, new)
+
+    assert stable["counts"]["fuzzy"] == 1
+    assert stable["examples"]["fuzzy"][0]["new_ref"] == "policy.md:P001"
