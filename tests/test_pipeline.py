@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from refmark.pipeline import (
     align_region_records,
@@ -15,6 +16,9 @@ from refmark.pipeline import (
     summarize_coverage,
     write_manifest,
 )
+
+
+PUBLISH_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_build_region_manifest_and_expand_neighbors():
@@ -318,6 +322,112 @@ def test_pipeline_cli_ci_runs_default_evidence_loop(tmp_path):
     assert (out_dir / "adaptation_plan.json").exists()
     compare = json.loads((out_dir / "compare_index.json").read_text(encoding="utf-8"))
     assert compare["best_by_hit_at_k"]["metrics"]["hit_at_k"] == 1.0
+
+
+def test_evidence_ci_quickstart_fixture_runs(tmp_path):
+    out_dir = tmp_path / "quickstart"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "ci",
+            str(PUBLISH_ROOT / "examples" / "evidence_ci_quickstart" / "corpus"),
+            str(PUBLISH_ROOT / "examples" / "evidence_ci_quickstart" / "eval.jsonl"),
+            "--out-dir",
+            str(out_dir),
+            "--source",
+            "local",
+            "--min-hit-at-k",
+            "1.0",
+            "--min-best-hit-at-k",
+            "1.0",
+            "--fail-on-regression",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    summary = json.loads(result.stdout)
+    assert summary["schema"] == "refmark.ci_summary.v1"
+    for artifact in ("manifest", "index", "eval", "smells", "adaptation_plan", "comparison"):
+        assert Path(summary["artifacts"][artifact]).exists()
+    eval_report = json.loads((out_dir / "eval.json").read_text(encoding="utf-8"))
+    compare_report = json.loads((out_dir / "compare_index.json").read_text(encoding="utf-8"))
+    assert eval_report["schema"] == "refmark.eval_index_report.v1"
+    assert eval_report["metrics"]["hit_at_k"] == 1.0
+    assert compare_report["schema"] == "refmark.compare_index_report.v1"
+
+
+def test_heterogeneous_corpus_stress_fixture_exposes_smells(tmp_path):
+    out_dir = tmp_path / "heterogeneous"
+    out_dir.mkdir()
+    index = out_dir / "index.json"
+    smells = out_dir / "smells.json"
+    eval_report_path = out_dir / "eval.json"
+    fixture = PUBLISH_ROOT / "examples" / "heterogeneous_corpus_stress"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "build-index",
+            str(fixture / "corpus"),
+            "-o",
+            str(index),
+            "--source",
+            "local",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "inspect-index",
+            str(index),
+            "-o",
+            str(smells),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "refmark.cli",
+            "eval-index",
+            str(index),
+            str(fixture / "eval.jsonl"),
+            "--strategy",
+            "rerank",
+            "--top-k",
+            "5",
+            "-o",
+            str(eval_report_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    index_payload = json.loads(index.read_text(encoding="utf-8"))
+    smell_payload = json.loads(smells.read_text(encoding="utf-8"))
+    eval_payload = json.loads(eval_report_path.read_text(encoding="utf-8"))
+    assert index_payload["stats"]["default_search_excluded_regions"] == 3
+    assert smell_payload["diagnostics"]["summary"]["query_magnets"] == 3
+    assert smell_payload["diagnostics"]["summary"]["exact_duplicate_groups"] == 1
+    assert eval_payload["schema"] == "refmark.eval_index_report.v1"
+    assert eval_payload["metrics"]["hit_at_k"] == 1.0
+    assert "query_style_gap" in eval_payload["data_smells"]["summary"]["by_type"]
 
 
 def test_pipeline_cli_expand_rejects_invalid_citation_refs(tmp_path):

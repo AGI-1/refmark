@@ -2,6 +2,16 @@ import json
 import subprocess
 import sys
 
+from examples.evidence_lifecycle_benchmark.review_lifecycle_disagreements import (
+    calibrate_filled_review,
+    paired_review_rows,
+    render_calibration_markdown,
+    render_side_by_side_diff,
+    render_worksheet_html,
+    review_card_lifecycle,
+    summarize_review_utility,
+    write_worksheet_csv,
+)
 from refmark.pipeline import RegionRecord, write_manifest
 from refmark.lifecycle import (
     Region,
@@ -13,8 +23,10 @@ from refmark.lifecycle import (
     evaluate_qrels_source_hash,
     evaluate_stable_migration,
     FuzzyRegionIndex,
+    lifecycle_decision,
     load_summary_rows,
     render_summary_rows,
+    split_support_match,
 )
 from refmark.rag_eval import CorpusMap, EvalSuite
 
@@ -381,6 +393,13 @@ def test_lifecycle_competent_baselines_compare_moved_evidence():
     )
 
     assert stable["counts"]["moved_exact"] == 1
+    assert stable["lifecycle_state_counts"]["moved"] == 2
+    moved_state = stable["lifecycle_by_ref"]["guide.md:P001"]
+    assert moved_state["state"] == "moved"
+    assert moved_state["next_action"] == "migrate_ref"
+    same_file_move = stable["lifecycle_by_ref"]["guide.md:P002"]
+    assert same_file_move["state"] == "moved"
+    assert same_file_move["reason"] == "same_file_exact_hash_new_ordinal"
     assert naive["counts"]["wrong_same_id"] == 1
     assert chunk_hash["counts"]["false_stale_alert"] == 2
     assert source_hash["counts"]["false_stale_alert"] == 2
@@ -418,6 +437,304 @@ def test_quote_selector_requires_review_for_ambiguous_quote_hits():
 
     assert quote_selector["counts"]["review_needed"] == 1
     assert layered_selector["counts"]["review_needed"] == 1
+
+
+def test_stable_migration_emits_lifecycle_decisions_for_rewrite_and_deleted():
+    old = {
+        "guide.md": [
+            Region(
+                "guide.md",
+                "guide.md:P001",
+                1,
+                "Refund requests must include the receipt number and be filed within thirty days.",
+                "h-old",
+            ),
+            Region(
+                "guide.md",
+                "guide.md:P002",
+                2,
+                "This paragraph was removed entirely from the new documentation.",
+                "h-removed",
+            ),
+        ]
+    }
+    new = {
+        "guide.md": [
+            Region(
+                "guide.md",
+                "guide.md:P001",
+                1,
+                "Refund requests must include the receipt number and be filed within thirty calendar days.",
+                "h-new",
+            ),
+            Region(
+                "guide.md",
+                "guide.md:P002",
+                2,
+                "Shipping labels are created after payment confirmation.",
+                "h-other",
+            ),
+        ]
+    }
+
+    stable = evaluate_stable_migration(old, new)
+
+    assert stable["lifecycle_by_ref"]["guide.md:P001"]["state"] == "rewritten"
+    assert stable["lifecycle_by_ref"]["guide.md:P001"]["next_action"] == "review_rewrite_or_preserve"
+    assert stable["lifecycle_by_ref"]["guide.md:P002"]["state"] == "deleted"
+    assert stable["lifecycle_by_ref"]["guide.md:P002"]["next_action"] == "refresh_or_remove_label"
+
+
+def test_lifecycle_decision_rejects_unknown_states():
+    try:
+        lifecycle_decision("magic", reason="bad", confidence=1.0)
+    except ValueError as exc:
+        assert "Unknown lifecycle state" in str(exc)
+    else:
+        raise AssertionError("unknown lifecycle state should fail")
+
+
+def test_review_card_lifecycle_schema_classifies_ambiguous_quote_hits():
+    state = review_card_lifecycle(
+        None,
+        stable="fuzzy",
+        quote_hits=2,
+        candidate_similarity=0.91,
+        quote_decision="false_stale_alert",
+        layered_decision="review_needed",
+        review_focus="quote_candidate",
+        candidate_ref="guide.md:P002",
+    )
+
+    assert state["state"] == "ambiguous"
+    assert state["reason"] == "multiple_quote_selector_hits"
+    assert state["next_action"] == "human_disambiguation_required"
+    assert state["candidate_ref"] == "guide.md:P002"
+
+
+def test_stable_migration_detects_split_support_candidate():
+    old_region = Region(
+        "guide.md",
+        "guide.md:P001",
+        1,
+        "Refund requires receipt approval portal deadline support escalation",
+        "h-old",
+    )
+    part_a = Region(
+        "guide.md",
+        "guide.md:P001",
+        1,
+        "Refund requires receipt approval portal",
+        "h-a",
+    )
+    part_b = Region(
+        "guide.md",
+        "guide.md:P002",
+        2,
+        "deadline support escalation",
+        "h-b",
+    )
+    old = {"guide.md": [old_region]}
+    new = {"guide.md": [part_a, part_b]}
+
+    split = split_support_match(old_region, [part_a, part_b])
+    stable = evaluate_stable_migration(old, new)
+
+    assert split is not None
+    assert stable["counts"]["split_support"] == 1
+    assert stable["lifecycle_by_ref"]["guide.md:P001"]["state"] == "split_support"
+    assert stable["lifecycle_by_ref"]["guide.md:P001"]["next_action"] == "review_range_repair"
+
+
+def test_paired_review_rows_compare_baseline_and_refmark_views():
+    card = {
+        "card_id": "c1",
+        "categories": ["quote_selector_silent_drift"],
+        "artifact": "artifact.json",
+        "old_ref": "guide.md:P001",
+        "candidate_ref": "guide.md:P002",
+        "old_path": "guide.md",
+        "candidate_path": "guide.md",
+        "stable_status": "fuzzy",
+        "lifecycle_state": "rewritten",
+        "lifecycle_reason": "fuzzy_text_match_requires_review",
+        "lifecycle_confidence": 0.9,
+        "lifecycle_priority": "medium",
+        "suggested_next_action": "review_rewrite_or_preserve",
+        "method_decisions": {
+            "chunk_id_content_hash": "false_stale_alert",
+            "chunk_hash_quote_selector": "preserved",
+            "refmark_layered_selector": "review_needed",
+        },
+        "signals": {"candidate_similarity": 0.9},
+        "old_text": "old",
+        "candidate_text": "new",
+    }
+    judgment = {
+        "card_id": "c1",
+        "model": "smoke",
+        "ok": True,
+        "verdict": "valid_rewritten",
+        "confidence": 0.8,
+        "rationale": "same evidence changed wording",
+    }
+
+    rows = paired_review_rows([card], [judgment], limit=1, text_chars=100, seed=1, blind_labels=True)
+    assert {row["review_view"] for row in rows} == {"baseline_selector", "refmark_lifecycle"}
+    assert {row["public_review_label"] for row in rows} == {"View A", "View B"}
+    assert {row["review_group_id"] for row in rows} == {"c1"}
+    baseline = next(row for row in rows if row["review_view"] == "baseline_selector")
+    refmark = next(row for row in rows if row["review_view"] == "refmark_lifecycle")
+    baseline["human_verdict"] = "valid_rewritten"
+    baseline["human_confidence"] = "0.7"
+    baseline["human_seconds"] = "12"
+    refmark["human_verdict"] = "valid_rewritten"
+    refmark["human_confidence"] = "0.9"
+    refmark["human_seconds"] = "7"
+    summary = summarize_review_utility(rows)
+
+    assert baseline["lifecycle_state"] == ""
+    assert refmark["lifecycle_state"] == "rewritten"
+    assert summary["views"]["baseline_selector"]["avg_seconds"] == 12
+    assert summary["views"]["refmark_lifecycle"]["avg_confidence"] == 0.9
+
+
+def test_review_worksheet_csv_schema_contains_human_utility_fields(tmp_path):
+    rows = [
+        {
+            "card_id": "c1",
+            "review_group_id": "g1",
+            "review_order": 1,
+            "review_view": "baseline_selector",
+            "public_review_label": "View A",
+            "view_instructions": "Judge the candidate.",
+            "corpus": "docs",
+            "priority": 5,
+            "priority_reasons": "sample",
+            "llm_majority": "valid_rewritten",
+            "llm_votes": "1/1",
+            "llm_vote_detail": "judge=valid_rewritten",
+            "human_verdict": "",
+            "human_confidence": "",
+            "human_seconds": "",
+            "human_suggested_action": "",
+            "alternative_support_found": "",
+            "split_range_repair_needed": "",
+            "human_notes": "",
+            "categories": "refmark_fuzzy_review",
+            "old_ref": "guide.md:P001",
+            "candidate_ref": "guide.md:P002",
+            "old_path": "guide.md",
+            "candidate_path": "guide.md",
+            "stable_status": "fuzzy",
+            "lifecycle_state": "rewritten",
+            "lifecycle_reason": "fuzzy_text_match_requires_review",
+            "lifecycle_confidence": "0.9",
+            "lifecycle_priority": "medium",
+            "suggested_next_action": "review_rewrite_or_preserve",
+            "method_decisions": "{}",
+            "signals": "{}",
+            "llm_rationales": "judge: same evidence",
+            "old_text": "## Python 3.6+\nUse `.dict()`.",
+            "candidate_text": "## Python 3.8+\nUse `.model_dump()`.",
+        }
+    ]
+    path = tmp_path / "worksheet.csv"
+
+    write_worksheet_csv(path, rows)
+    header = path.read_text(encoding="utf-8").splitlines()[0].split(",")
+
+    for field in (
+        "review_group_id",
+        "review_order",
+        "review_view",
+        "public_review_label",
+        "human_seconds",
+        "human_suggested_action",
+        "alternative_support_found",
+        "split_range_repair_needed",
+        "lifecycle_state",
+        "suggested_next_action",
+    ):
+        assert field in header
+
+
+def test_review_html_renders_formatted_side_by_side_markdown_diff():
+    old = "## Python 3.6+\nUse `.dict()` for export."
+    new = "## Python 3.8+\nUse `.model_dump()` for export."
+    diff_html = render_side_by_side_diff(old, new)
+    worksheet_html = render_worksheet_html(
+        [
+            {
+                "card_id": "c1",
+                "review_view": "refmark_lifecycle",
+                "public_review_label": "View B",
+                "view_instructions": "Judge the candidate.",
+                "priority": 3,
+                "priority_reasons": "sample",
+                "llm_majority": "valid_rewritten",
+                "llm_votes": "1/1",
+                "llm_vote_detail": "judge=valid_rewritten",
+                "corpus": "docs",
+                "old_ref": "guide.md:P001",
+                "candidate_ref": "guide.md:P002",
+                "lifecycle_state": "rewritten",
+                "lifecycle_confidence": "0.9",
+                "lifecycle_priority": "medium",
+                "suggested_next_action": "review_rewrite_or_preserve",
+                "lifecycle_reason": "fuzzy_text_match_requires_review",
+                "categories": "refmark_fuzzy_review",
+                "method_decisions": "{}",
+                "signals": "{}",
+                "llm_rationales": "judge: same evidence",
+                "old_text": old,
+                "candidate_text": new,
+            }
+        ]
+    )
+
+    assert "Python 3.6+" in diff_html
+    assert "Python 3.8+" in diff_html
+    assert "diff-cell old changed" in diff_html
+    assert "diff-cell new changed" in diff_html
+    assert '<span class="code-ish">.model_dump()</span>' in diff_html
+    assert "Side-by-side Evidence Diff" in worksheet_html
+    assert "Raw side-by-side text" in worksheet_html
+
+
+def test_calibration_report_counts_safe_unsafe_and_review_verdicts():
+    rows = [
+        {
+            "human_verdict": "valid_rewritten",
+            "human_confidence": "0.9",
+            "categories": "refmark_fuzzy_review",
+            "stable_status": "fuzzy",
+            "signals": json.dumps({"candidate_similarity": 0.91}),
+        },
+        {
+            "human_verdict": "stale",
+            "human_confidence": "0.8",
+            "categories": "quote_selector_silent_drift",
+            "stable_status": "stale",
+            "signals": json.dumps({"candidate_similarity": 0.72}),
+        },
+        {
+            "human_verdict": "split_support",
+            "human_confidence": "0.85",
+            "categories": "quote_selector_silent_drift",
+            "stable_status": "split_support",
+            "signals": json.dumps({"candidate_similarity": 0.88}),
+        },
+    ]
+
+    calibration = calibrate_filled_review(rows)
+    rendered = render_calibration_markdown(calibration)
+
+    assert calibration["judged_rows"] == 3
+    assert calibration["refmark_review"]["safe_preservation"] == 1
+    assert calibration["quote_selector_silent_drift"]["unsafe_if_auto_preserved"] == 1
+    assert calibration["quote_selector_silent_drift"]["review_needed"] == 1
+    assert "Candidate Rules" in rendered
 
 
 def test_source_hash_baseline_preserves_unchanged_file_and_flags_changed_file():

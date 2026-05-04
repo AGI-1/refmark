@@ -333,6 +333,79 @@ def write_lifecycle_tool_jsonl(
     _write_jsonl(path, export_lifecycle_summary_rows(lifecycle_payload, tool=tool))
 
 
+def export_qrels_rows(suite: EvalSuite, *, run_id: str = "refmark") -> list[dict[str, Any]]:
+    """Return qrels/TREC-style relevance rows with Refmark refs as document IDs.
+
+    Each gold ref expands to one row. The dependency-free shape keeps both named
+    fields and the classic four-column qrels tuple:
+
+    `query_id iteration document_id relevance`
+    """
+
+    rows: list[dict[str, Any]] = []
+    for index, example in enumerate(suite.examples, start=1):
+        query_id = str(example.metadata.get("query_id") or f"q{index:04d}")
+        for ref in suite.corpus.expand_refs(example.gold_refs):
+            rows.append(
+                {
+                    "schema": "refmark.qrels_row.v1",
+                    "query_id": query_id,
+                    "iteration": run_id,
+                    "document_id": ref,
+                    "relevance": 1,
+                    "query": example.query,
+                    "gold_refs": list(example.gold_refs),
+                    "source_hash": example.source_hashes.get(ref),
+                }
+            )
+    return rows
+
+
+def write_qrels_jsonl(path: str | Path, suite: EvalSuite, *, run_id: str = "refmark") -> None:
+    """Write qrels-style rows as JSONL."""
+
+    _write_jsonl(path, export_qrels_rows(suite, run_id=run_id))
+
+
+def export_document_metadata(corpus: CorpusMap) -> list[dict[str, Any]]:
+    """Return document/node metadata for LangChain/LlamaIndex-style ingestion.
+
+    Callers can attach the `metadata` dict to existing document objects without
+    adopting Refmark's built-in retriever. The stable ref is the important part:
+    it lets later retrieval results map back into evidence evaluation and
+    lifecycle checks.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for ref, record in sorted(corpus.by_stable_ref.items()):
+        rows.append(
+            {
+                "schema": "refmark.document_metadata.v1",
+                "text": record.text,
+                "metadata": {
+                    "refmark.ref": ref,
+                    "refmark.doc_id": record.doc_id,
+                    "refmark.region_id": record.region_id,
+                    "refmark.source_path": record.source_path,
+                    "refmark.ordinal": record.ordinal,
+                    "refmark.hash": record.hash,
+                    "refmark.corpus_fingerprint": corpus.fingerprint,
+                    "refmark.revision_id": corpus.revision_id,
+                    "refmark.parent_region_id": record.parent_region_id,
+                    "refmark.prev_region_id": record.prev_region_id,
+                    "refmark.next_region_id": record.next_region_id,
+                },
+            }
+        )
+    return rows
+
+
+def write_document_metadata_jsonl(path: str | Path, corpus: CorpusMap) -> None:
+    """Write LangChain/LlamaIndex-style text+metadata rows as JSONL."""
+
+    _write_jsonl(path, export_document_metadata(corpus))
+
+
 def eval_tool_summary(suite: EvalSuite, run: EvalRun, *, tool: str = "generic") -> dict[str, Any]:
     """Return a compact run summary suitable for external experiment trackers."""
 

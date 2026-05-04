@@ -12,7 +12,7 @@ load_local_env()
 from refmark.adapt_plan import build_adaptation_plan, read_smell_report
 from refmark.citations import citation_refs_to_strings, parse_citation_refs
 from refmark.core import inject, strip
-from refmark.data_smells import build_data_smell_report
+from refmark.data_smells import build_data_smell_report, compare_data_smell_reports
 from refmark.documents import align_documents, map_document
 from refmark.document_io import extract_document_text, text_mapping_extension
 from refmark.discovery import build_discovery_context_card, discover_corpus, load_discovery, repair_discovery_clusters, review_discovery, write_discovery
@@ -310,6 +310,16 @@ def main():
     adapt_plan_parser.add_argument("--max-actions", type=int, default=80)
     adapt_plan_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path. Defaults to stdout.")
 
+    compare_smells_parser = subparsers.add_parser(
+        "compare-smells",
+        help="Compare two Refmark data-smell reports from before/after adaptation runs.",
+    )
+    compare_smells_parser.add_argument("baseline", help="Baseline refmark.data_smells.v1 JSON report.")
+    compare_smells_parser.add_argument("current", help="Current refmark.data_smells.v1 JSON report.")
+    compare_smells_parser.add_argument("--baseline-name", default="baseline")
+    compare_smells_parser.add_argument("--current-name", default="current")
+    compare_smells_parser.add_argument("-o", "--output", default=None, help="Optional JSON output path. Defaults to stdout.")
+
     feedback_parser = subparsers.add_parser(
         "feedback-diagnostics",
         help="Aggregate production query feedback into reviewable Refmark adaptation candidates.",
@@ -563,6 +573,8 @@ def main():
         _handle_ci(args)
     elif args.command == "adapt-plan":
         _handle_adapt_plan(args)
+    elif args.command == "compare-smells":
+        _handle_compare_smells(args)
     elif args.command == "feedback-diagnostics":
         _handle_feedback_diagnostics(args)
     elif args.command == "lifecycle-git":
@@ -1183,6 +1195,23 @@ def _handle_adapt_plan(args):
     if args.output:
         Path(args.output).write_text(output, encoding="utf-8")
         print(f"[OK] Wrote adaptation plan to {args.output}", file=sys.stderr)
+    else:
+        print(output)
+
+
+def _handle_compare_smells(args):
+    baseline = read_smell_report(args.baseline)
+    current = read_smell_report(args.current)
+    payload = compare_data_smell_reports(
+        baseline,
+        current,
+        baseline_name=args.baseline_name,
+        current_name=args.current_name,
+    )
+    output = json.dumps(payload, indent=2, ensure_ascii=False)
+    if args.output:
+        Path(args.output).write_text(output, encoding="utf-8")
+        print(f"[OK] Wrote data-smell comparison to {args.output}", file=sys.stderr)
     else:
         print(output)
 

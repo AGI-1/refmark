@@ -33,6 +33,17 @@ Or convert a saved smell report into a conservative adaptation plan later:
 python -m refmark.cli adapt-plan runs/smells.json -o runs/adaptation_plan.json
 ```
 
+After applying an adaptation, compare the before/after smell profile:
+
+```bash
+python -m refmark.cli compare-smells \
+  runs/before_smells.json \
+  runs/after_smells.json \
+  --baseline-name before \
+  --current-name after \
+  -o runs/smell_delta.json
+```
+
 The report schema is `refmark.data_smells.v1` and contains:
 
 - `summary`: counts by type/severity plus run/corpus fingerprints;
@@ -42,6 +53,13 @@ The adaptation-plan schema is `refmark.adaptation_plan.v1`. It does not mutate
 the corpus. It normalizes smells into review-required actions such as stale
 label refresh, shadow metadata/doc2query additions, confusion-pair mapping,
 range/context tuning, confidence gating, and query-magnet role assignment.
+
+The comparison schema is `refmark.data_smell_comparison.v1`. It reports:
+
+- smell-count and high-severity deltas;
+- deltas by smell type and severity;
+- retrieval metric deltas when present;
+- resolved, new, and persistent smell identities.
 
 Current smell types:
 
@@ -56,6 +74,9 @@ Current smell types:
 | `overcitation` | Context includes broad non-gold evidence. | Tighten expansion or split broad regions. |
 | `low_confidence` | Top scores have narrow margins. | Route to reranker, review, or multi-candidate UI. |
 | `query_magnet` | A ref attracts many wrong top hits. | Downweight/exclude hub content or add disambiguation. |
+| `duplicate_support` | Multiple regions contain the same evidence text. Exact duplicate detection is conservative and does not catch paraphrases. | Mark alternate support, link/merge sections, or deduplicate gold labels. |
+| `contradictory_support` | Regions share topic terms but use opposing obligation/permission cues. This is lexical consistency triage, not proof of contradiction. | Review scope, date, deprecation, or true contradiction. |
+| `uncovered_region` | Corpus regions have no gold eval coverage. | Generate eval rows or mark low-value regions excluded from eval. |
 
 Each smell should include enough information for an agent or reviewer to act:
 
@@ -75,7 +96,9 @@ python -m refmark.cli inspect-index index.json -o index_smells.json
 
 That report includes query magnets, oversized regions, sparse retrieval views,
 exact duplicates, duplicate candidates, and possible conflict wording. These
-signals are useful before any questions exist.
+signals are useful before any questions exist. The eval-run smell report can
+then connect the same corpus-shape symptoms to actual query failures and
+adaptation actions.
 
 ## How To Use Smells
 
@@ -88,7 +111,8 @@ A typical improvement loop is:
    metadata issue, or retriever issue.
 5. Apply a scoped adaptation: shadow metadata, query rewrite, alternate gold,
    region boundary change, exclusion role, or reranker/hard-negative update.
-6. Re-run the eval and compare the smell report against the previous run.
+6. Re-run the eval and compare the smell report against the previous run with
+   `compare-smells`.
 
 The point is visibility. A greener heatmap is only valuable when the smell
 report shows that real weak topics, stale labels, or repeated confusions were

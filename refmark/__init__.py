@@ -4,7 +4,7 @@ from refmark.adapt_plan import AdaptationAction, AdaptationPlan, build_adaptatio
 from refmark.citations import CitationRef, parse_citation_refs, validate_citation_refs
 from refmark.core import inject, strip
 from refmark.ephemeral import apply_ephemeral_edits, build_ephemeral_map
-from refmark.data_smells import DataSmell, DataSmellReport, build_data_smell_report
+from refmark.data_smells import DataSmell, DataSmellReport, build_data_smell_report, compare_data_smell_reports
 from refmark.discovery import (
     DiscoveryContextCard,
     DiscoveryManifest,
@@ -60,13 +60,17 @@ from refmark.provenance import build_eval_provenance, file_fingerprint, validate
 from refmark.question_plan import QuestionPlanItem, build_question_plan, question_plan_to_dict
 from refmark.rag_adapters import (
     eval_tool_summary,
+    export_document_metadata,
     export_deepeval_cases,
     export_lifecycle_summary_rows,
+    export_qrels_rows,
     export_ragas_rows,
     export_trace_events,
     refmark_evidence_metrics,
+    write_document_metadata_jsonl,
     write_deepeval_jsonl,
     write_lifecycle_tool_jsonl,
+    write_qrels_jsonl,
     write_ragas_jsonl,
     write_trace_jsonl,
 )
@@ -141,6 +145,7 @@ __all__ = [
     "build_question_plan",
     "build_section_map",
     "build_data_smell_report",
+    "compare_data_smell_reports",
     "default_full_pipeline_config",
     "discover_corpus",
     "discovery_map_items",
@@ -148,8 +153,10 @@ __all__ = [
     "evaluate_alignment_coverage",
     "evaluate_git_revisions",
     "eval_tool_summary",
+    "export_document_metadata",
     "export_deepeval_cases",
     "export_lifecycle_summary_rows",
+    "export_qrels_rows",
     "export_ragas_rows",
     "export_trace_events",
     "expand_region_context",
@@ -196,10 +203,12 @@ __all__ = [
     "validate_citation_refs",
     "write_discovery",
     "write_discovery_map_html",
+    "write_document_metadata_jsonl",
     "write_deepeval_jsonl",
     "write_full_pipeline_config_template",
     "write_lifecycle_tool_jsonl",
     "write_manifest",
+    "write_qrels_jsonl",
     "write_ragas_jsonl",
     "write_trace_jsonl",
     "__version__",

@@ -1,0 +1,6 @@
+{"query":"How long does a password reset link last?","gold_refs":["admin_guide:P03"],"metadata":{"query_style":"direct"}}
+{"query":"What fields are included in the audit export?","gold_refs":["admin_guide:P05"],"metadata":{"query_style":"direct"}}
+{"query":"Where should automation credentials be stored and how often are they rotated?","gold_refs":["admin_guide:P07","table_records:P04"],"metadata":{"query_style":"duplicate_support"}}
+{"query":"What should be included when escalating an urgent incident?","gold_refs":["wiki_notes:P04","table_records:P06"],"metadata":{"query_style":"duplicate_support"}}
+{"query":"How long are security incident logs kept?","gold_refs":["policy_notes:P02"],"metadata":{"query_style":"direct"}}
+{"query":"What happens to deletion schedules during a legal hold?","gold_refs":["policy_notes:P06"],"metadata":{"query_style":"direct"}}

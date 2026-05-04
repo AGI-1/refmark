@@ -75,6 +75,23 @@ without writing the patched output.
 - The map is disposable. For long-lived corpora, use a manifest or shadow
   registry instead.
 
+## Disposable vs Durable
+
+Ephemeral mode is for one-off work. It gives a model temporary addresses and a
+bounded apply step, then the map can be thrown away. That is enough for tasks
+like proofreading a contract, patching a few paragraphs, or reviewing a report.
+
+Use durable Refmark mode instead when any of these are true:
+
+- the same document will be reviewed repeatedly;
+- eval labels, citations, or training examples must survive revisions;
+- reviewers need an audit trail of why an address moved or became stale;
+- the output affects a production corpus or compliance workflow.
+
+For important one-off work, keep the optional manifest and dry-run report as an
+audit artifact. They do not turn the workflow into lifecycle mode, but they make
+the model's requested edits and Refmark's resolution decisions inspectable.
+
 ## Why This Matters
 
 Durable Refmark mode is about lifecycle: stable refs, revision diffs, stale

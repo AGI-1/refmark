@@ -1,0 +1,9 @@
+{
+  "edits": [
+    {
+      "ref": "P03",
+      "action": "replace",
+      "new_text": "Payment is due within 45 days after invoice receipt."
+    }
+  ]
+}

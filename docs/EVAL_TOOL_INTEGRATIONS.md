@@ -16,6 +16,27 @@ This is useful because answer-level evaluation can say that an answer is weak,
 but it often cannot localize whether the failure came from the retriever,
 reranker, context expansion policy, stale labels, or the generator.
 
+## Handoff Schemas, Not Hosted Integrations
+
+The adapters in this document produce versioned, dependency-free handoff rows.
+They are snapshots that can be imported into existing tools or logged beside
+their native runs. They are not live synchronization connectors, hosted
+ingestion clients, or wrappers around vendor SDKs.
+
+This boundary is intentional:
+
+- Refmark keeps ownership of refs, source hashes, fingerprints, and lifecycle
+  states.
+- Existing tools keep ownership of answer judges, traces, dashboards, datasets,
+  and production observability.
+- The handoff schemas are stable enough for tests and internal pipelines, but
+  external SDK object shapes can change independently.
+
+When a tool exposes a native object, callers can convert these rows into that
+object near their application boundary. Refmark's compatibility contract is the
+`refmark.*.v1` schema in the exported data, not a guarantee that every external
+SDK release will keep the same constructor API.
+
 ## RAGAS-Style Rows
 
 The adapter is dependency-free. It emits ordinary dictionaries with common
@@ -133,6 +154,55 @@ trace metadata or span attributes:
 For Langfuse-style usage, store the event as a trace/span with the `attributes`
 object as metadata. For Phoenix/OpenInference-style usage, the same attributes
 can be attached to retrieval spans or dataset examples.
+
+## Qrels / TREC-Style Rows
+
+`export_qrels_rows(...)` emits one dependency-free relevance row per expanded
+gold ref:
+
+```python
+from refmark import export_qrels_rows
+
+qrels = export_qrels_rows(suite, run_id="gold")
+```
+
+Each row includes the classic qrels fields:
+
+- `query_id`
+- `iteration`
+- `document_id`
+- `relevance`
+
+Here `document_id` is the stable Refmark ref, such as `policy:P02`. The row also
+keeps the original query, gold refs, and source hash when available. This is the
+lowest-friction bridge to IR tooling: Refmark supplies the address space and
+lifecycle checks; trec_eval-style tools can still score ranked results.
+
+## LangChain / LlamaIndex Metadata Rows
+
+`export_document_metadata(corpus)` returns text plus metadata rows that can be
+attached to existing document/node objects:
+
+```python
+from refmark import CorpusMap, export_document_metadata
+
+corpus = CorpusMap.from_manifest(".refmark/docs.jsonl")
+rows = export_document_metadata(corpus)
+```
+
+Each row has:
+
+- `text`
+- `metadata["refmark.ref"]`
+- `metadata["refmark.doc_id"]`
+- `metadata["refmark.region_id"]`
+- `metadata["refmark.source_path"]`
+- `metadata["refmark.hash"]`
+- `metadata["refmark.corpus_fingerprint"]`
+
+The important rule is simple: keep your existing chunking/indexing stack if you
+like it, but attach stable refs so retrieval results can be evaluated and
+validated against corpus revisions later.
 
 ## Lifecycle Rows
 

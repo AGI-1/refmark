@@ -43,6 +43,37 @@ old ref -> validate against new corpus
 The value is not that evidence always survives. The value is that drift becomes
 explicit.
 
+Current lifecycle artifacts now carry both coarse compatibility fields and a
+more actionable `lifecycle_by_ref` map. The coarse table remains:
+
+```text
+preserved / review-needed / stale
+```
+
+The richer review-state vocabulary is meant for human review and adaptation
+planning:
+
+| State | Meaning | Typical action |
+| --- | --- | --- |
+| `unchanged` | same evidence hash still resolves locally | keep label |
+| `moved` | exact evidence survived at a new ordinal or path | migrate ref |
+| `rewritten` | high-similarity candidate exists but text changed | review rewrite or preserve |
+| `split_support` | old evidence appears covered by multiple new regions | repair to a range |
+| `deleted` | no exact or high-confidence candidate survived | refresh or remove label |
+| `ambiguous` | multiple selector candidates compete | human disambiguation |
+| `alternative_support` | another support candidate may be valid | review alternate support |
+| `low_confidence` | candidate exists but is below auto-preserve gates | review manually |
+
+Future states such as `merged`, `partial_overlap`, `semantic_drift`,
+`superseded`, `deprecated`, `externalized`, `duplicate_support`,
+`contradictory_support`, and `invalidated` are reserved for richer
+review/adaptation workflows. They are useful categories, but the current
+deterministic benchmark does not claim to detect all of them automatically.
+
+Each lifecycle decision carries a reason, confidence, candidate ref when known,
+suggested next action, and coarse priority. Confidence is selector/resolver
+confidence, not semantic truth.
+
 ## Natural Revision Results
 
 Five Git-backed documentation corpora were checked from one base version to

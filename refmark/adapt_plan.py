@@ -215,6 +215,45 @@ def _actions_for_smell(smell: dict[str, Any]) -> list[AdaptationAction]:
                 evidence,
             )
         ]
+    if smell_type == "duplicate_support":
+        return [
+            _action(
+                "review_duplicate_or_alternate_support",
+                "support_topology",
+                priority,
+                refs,
+                smell_type,
+                message,
+                ["mark_alternate_support_refs", "merge_or_link_equivalent_sections", "deduplicate_eval_gold_refs"],
+                evidence,
+            )
+        ]
+    if smell_type == "contradictory_support":
+        return [
+            _action(
+                "review_possible_contradiction",
+                "corpus_consistency",
+                priority,
+                refs,
+                smell_type,
+                message,
+                ["add_scope_or_date_metadata", "mark_superseded_or_deprecated_region", "route_to_subject_matter_review"],
+                evidence,
+            )
+        ]
+    if smell_type == "uncovered_region":
+        return [
+            _action(
+                "add_or_exclude_eval_coverage",
+                "coverage_planning",
+                priority,
+                refs[:20],
+                smell_type,
+                message,
+                ["generate_eval_questions_for_uncovered_regions", "mark_low_value_regions_excluded_from_eval", "review_coverage_targets"],
+                evidence,
+            )
+        ]
     return [
         _action(
             "review_data_smell",

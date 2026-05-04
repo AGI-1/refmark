@@ -216,15 +216,47 @@ python -m refmark.cli lifecycle-validate-labels \
 
 ## Tiny End-To-End Example
 
-Run the included no-infra example:
+Run the smallest included no-infra evidence-CI example:
+
+```bash
+python -m refmark.cli ci examples/evidence_ci_quickstart/corpus examples/evidence_ci_quickstart/eval.jsonl \
+  --out-dir tmp/evidence_ci_quickstart \
+  --source local \
+  --min-hit-at-k 1.0 \
+  --min-best-hit-at-k 1.0 \
+  --fail-on-regression
+```
+
+It writes a manifest, portable index, eval report, comparison report,
+`smells.json`, and `adaptation_plan.json` under `tmp/evidence_ci_quickstart/`.
+
+For a larger demo with a browser payload and sample query result, run:
 
 ```bash
 python examples/docs_navigation_pipeline/run.py
 ```
 
-It writes a manifest, TOC map, portable index, browser payload, eval reports,
-`compare_index.json`, `smells.json`, `adaptation_plan.json`, and a sample query
-result under `examples/docs_navigation_pipeline/output/`.
+## What To Commit
+
+Commit small source-of-truth inputs:
+
+- corpus source files if they belong to your project;
+- curated `eval.jsonl` rows;
+- pipeline/config files;
+- optionally, a compact manifest if your team wants reviewed refs in version
+  control.
+
+Do not commit routine generated outputs:
+
+- portable indexes;
+- large marked copies;
+- `smells.json` and `adaptation_plan.json` from every run;
+- provider caches, model outputs, and benchmark work directories;
+- full review worksheets unless intentionally promoted to a small fixture.
+
+For CI, write generated artifacts under a run directory such as `runs/` or
+`tmp/`, upload them as build artifacts when useful, and keep the repo focused
+on inputs plus stable fixtures.
 
 ## CI Shape
 

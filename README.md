@@ -4,23 +4,29 @@
 
 Turn your corpus into a regression test suite for retrieval.
 
-Refmark turns documents and code into a stable, addressable evidence space for
-AI systems. Once a corpus has refs like `policy:P13`, any retriever, reranker,
-embedder, query rewriter, context-expansion policy, citation generator, or
-corpus-local experiment can be evaluated by the same concrete question:
+Refmark turns documents and code into a versioned logical address space of
+evidence regions. A source span gets a manifest ref like `policy:P13`;
+retrieval results, citations, eval labels, review notes, bounded edits, and
+training examples can then point at the same maintained address instead of at
+drifting chunks or copied text.
+
+Once a corpus has refs, any retriever, reranker, embedder, query rewriter,
+context-expansion policy, citation generator, or corpus-local experiment can be
+evaluated by the same concrete question:
 
 > Did it recover the correct source region or range?
 
 That makes RAG evaluation feel more like CI than one-off answer judging. When
-the corpus changes, Refmark can identify which refs changed or disappeared so
-only affected evaluation rows or downstream evidence labels need review.
+the corpus changes, Refmark can classify evidence labels as preserved,
+review-needed, or stale so downstream evaluation rows, citations, and training
+labels do not silently drift.
 
 Short version: evidence recovery becomes measurable.
 
-Refmark is best read as **stable evidence references**: source regions that can
-be resolved, scored, highlighted, diffed, or marked stale. It does not replace
-your retriever, vector database, judge model, or answer evaluator. It gives
-those systems a shared address space.
+Refmark is best read as **stable evidence references plus lifecycle metadata**:
+source regions that can be resolved, scored, highlighted, diffed, migrated, or
+marked stale. It does not replace your retriever, vector database, judge model,
+or answer evaluator. It gives those systems a shared address-space contract.
 
 Start with [Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md) for the
 canonical `map -> eval -> compare -> smells -> adapt -> manifest diff` loop.
@@ -29,10 +35,11 @@ For a compact command/API inventory and non-goals, see
 
 ## 30-Second Mental Model
 
-Given a document with addressable regions, a pipeline predicts which refs or
-ref ranges answer a question. Refmark resolves those ids back to source text
-and scores evidence recovery deterministically, before you judge generated
-prose.
+Given a document with addressable regions, a pipeline predicts which refs or ref
+ranges answer a question. Refmark resolves those ids back to source text and
+scores evidence recovery deterministically, before you judge generated prose.
+Refs are logical identifiers in a manifest, not memory pointers or fixed byte
+offsets.
 
 ```text
 Document:
@@ -76,11 +83,36 @@ After corpus update:
 
 ```mermaid
 flowchart LR
-  A["Document or code"] --> B["Inject anchors"]
-  B --> C["Model predicts refs"]
-  C --> D["Resolve regions"]
-  D --> E["Score, expand, highlight, edit, or mark stale"]
+  A["Source corpus"] --> B["Address space<br/>manifest + refs/ranges"]
+  B --> C["Evidence obligations<br/>queries, citations, edits, labels"]
+  C --> D["Resolvers + lifecycle states<br/>preserved, review, stale"]
+  D --> E["Consumers<br/>RAG eval, citation scoring, review, CI, MCP"]
 ```
+
+See [Address Space Contract](docs/ADDRESS_SPACE_CONTRACT.md) for the formal
+layers and how Refmark relates to qrels, robust anchoring, quote selectors, and
+existing RAG lifecycle tools.
+
+## Positioning
+
+Refmark does not claim to invent span ids, quote selectors, qrels, content
+hashes, or robust anchoring. Those are established and useful primitives.
+
+Refmark's contribution is to compose those primitives into a maintained
+address-space contract for AI workflows:
+
+- a corpus manifest owns stable refs/ranges and source metadata;
+- selector and resolver signals are versioned as evidence for lifecycle
+  decisions, not treated as magic truth;
+- evidence obligations point to refs instead of copied text alone;
+- lifecycle validation classifies preserved, changed, ambiguous, and stale
+  support after corpus revisions;
+- consumers such as RAG eval, citation scoring, review packets, and bounded
+  edits share the same refs.
+
+Shorter version:
+
+> Layered selectors solve reattachment. Refmark solves evidence lifecycle.
 
 ## Use Refmark For
 

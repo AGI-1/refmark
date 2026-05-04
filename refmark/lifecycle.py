@@ -16,6 +16,26 @@ from refmark.search_index import approx_tokens
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
+LIFECYCLE_STATES = {
+    "unchanged",
+    "moved",
+    "rewritten",
+    "split_support",
+    "merged",
+    "deleted",
+    "ambiguous",
+    "alternative_support",
+    "duplicate_support",
+    "contradictory_support",
+    "low_confidence",
+    "partial_overlap",
+    "semantic_drift",
+    "superseded",
+    "deprecated",
+    "externalized",
+    "invalidated",
+}
+
 DEFAULT_SUMMARY_COLUMNS = [
     "repo_url",
     "old_ref",
@@ -45,6 +65,26 @@ class Region:
     ordinal: int
     text: str
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class LifecycleDecision:
+    state: str
+    reason: str
+    confidence: float
+    next_action: str
+    candidate_ref: str | None = None
+    priority: str = "medium"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "state": self.state,
+            "reason": self.reason,
+            "confidence": round(self.confidence, 4),
+            "next_action": self.next_action,
+            "candidate_ref": self.candidate_ref,
+            "priority": self.priority,
+        }
 
 
 def main() -> None:
@@ -270,6 +310,74 @@ def token_set(text: str) -> set[str]:
     return set(token.lower() for token in TOKEN_RE.findall(text))
 
 
+def lifecycle_decision(
+    state: str,
+    *,
+    reason: str,
+    confidence: float,
+    next_action: str | None = None,
+    candidate_ref: str | None = None,
+    priority: str | None = None,
+) -> LifecycleDecision:
+    if state not in LIFECYCLE_STATES:
+        raise ValueError(f"Unknown lifecycle state: {state}")
+    action = next_action or default_next_action(state)
+    return LifecycleDecision(
+        state=state,
+        reason=reason,
+        confidence=max(0.0, min(1.0, confidence)),
+        next_action=action,
+        candidate_ref=candidate_ref,
+        priority=priority or default_priority(state),
+    )
+
+
+def default_next_action(state: str) -> str:
+    if state == "unchanged":
+        return "keep_label"
+    if state == "moved":
+        return "migrate_ref"
+    if state == "rewritten":
+        return "review_rewrite_or_preserve"
+    if state == "split_support":
+        return "review_range_repair"
+    if state == "merged":
+        return "review_merged_support"
+    if state == "deleted":
+        return "refresh_or_remove_label"
+    if state == "ambiguous":
+        return "human_disambiguation_required"
+    if state == "alternative_support":
+        return "review_alternative_support"
+    if state == "duplicate_support":
+        return "review_duplicate_support"
+    if state == "contradictory_support":
+        return "review_contradiction"
+    if state == "low_confidence":
+        return "review_low_confidence_match"
+    if state == "partial_overlap":
+        return "review_partial_support"
+    if state == "semantic_drift":
+        return "verify_semantic_equivalence"
+    if state == "superseded":
+        return "review_new_canonical_support"
+    if state == "deprecated":
+        return "flag_for_deprecation_review"
+    if state == "externalized":
+        return "review_external_corpus_boundary"
+    if state == "invalidated":
+        return "archive_or_correct_label"
+    raise ValueError(f"Unknown lifecycle state: {state}")
+
+
+def default_priority(state: str) -> str:
+    if state in {"unchanged", "moved"}:
+        return "low"
+    if state in {"deleted", "contradictory_support", "semantic_drift", "externalized", "invalidated"}:
+        return "high"
+    return "medium"
+
+
 def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[Region]]) -> dict[str, object]:
     all_new = [region for regions in new.values() for region in regions]
     fuzzy_index = FuzzyRegionIndex(all_new)
@@ -281,8 +389,10 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
     for region in all_new:
         new_by_fp.setdefault(region.fingerprint, []).append(region)
     counts = Counter()
-    examples = {"same_file_exact": [], "moved_exact": [], "fuzzy": [], "stale": []}
+    lifecycle_counts = Counter()
+    examples = {"same_file_exact": [], "moved_exact": [], "fuzzy": [], "split_support": [], "stale": []}
     status_by_ref: dict[str, str] = {}
+    lifecycle_by_ref: dict[str, dict[str, object]] = {}
     total = 0
     for path, regions in old.items():
         same_file_fps = new_by_path_fp.get(path, {})
@@ -293,6 +403,14 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
             if same:
                 counts["same_file_exact"] += 1
                 status_by_ref[region.ref] = "same_file_exact"
+                decision = lifecycle_decision(
+                    "unchanged" if same.ordinal == region.ordinal else "moved",
+                    reason="same_file_exact_hash" if same.ordinal == region.ordinal else "same_file_exact_hash_new_ordinal",
+                    confidence=1.0,
+                    candidate_ref=same.ref,
+                )
+                lifecycle_counts[decision.state] += 1
+                lifecycle_by_ref[region.ref] = decision.as_dict()
                 if same.ordinal != region.ordinal and len(examples["same_file_exact"]) < 6:
                     examples["same_file_exact"].append({"old_ref": region.ref, "new_ref": same.ref})
                 continue
@@ -300,6 +418,14 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
             if moved:
                 counts["moved_exact"] += 1
                 status_by_ref[region.ref] = "moved_exact"
+                decision = lifecycle_decision(
+                    "moved",
+                    reason="global_exact_hash_different_path",
+                    confidence=1.0,
+                    candidate_ref=moved[0].ref,
+                )
+                lifecycle_counts[decision.state] += 1
+                lifecycle_by_ref[region.ref] = decision.as_dict()
                 if len(examples["moved_exact"]) < 6:
                     examples["moved_exact"].append({"old_ref": region.ref, "new_ref": moved[0].ref})
                 continue
@@ -309,15 +435,56 @@ def evaluate_stable_migration(old: dict[str, list[Region]], new: dict[str, list[
             if best and best[1] >= 0.82:
                 counts["fuzzy"] += 1
                 status_by_ref[region.ref] = "fuzzy"
+                decision = lifecycle_decision(
+                    "rewritten",
+                    reason="fuzzy_text_match_requires_review",
+                    confidence=best[1],
+                    next_action="review_rewrite_or_preserve",
+                    candidate_ref=best[0].ref,
+                )
+                lifecycle_counts[decision.state] += 1
+                lifecycle_by_ref[region.ref] = decision.as_dict()
                 if len(examples["fuzzy"]) < 6:
                     examples["fuzzy"].append({"old_ref": region.ref, "new_ref": best[0].ref, "similarity": round(best[1], 3)})
+            elif split := split_support_match(region, all_new):
+                support_regions, coverage = split
+                counts["split_support"] += 1
+                status_by_ref[region.ref] = "split_support"
+                candidate_refs = [candidate.ref for candidate in support_regions]
+                decision = lifecycle_decision(
+                    "split_support",
+                    reason="combined_neighboring_or_distributed_regions_cover_old_tokens",
+                    confidence=coverage,
+                    candidate_ref=",".join(candidate_refs),
+                )
+                lifecycle_counts[decision.state] += 1
+                lifecycle_by_ref[region.ref] = decision.as_dict()
+                if len(examples["split_support"]) < 6:
+                    examples["split_support"].append(
+                        {
+                            "old_ref": region.ref,
+                            "candidate_refs": candidate_refs,
+                            "coverage": round(coverage, 3),
+                        }
+                    )
             else:
                 counts["stale"] += 1
                 status_by_ref[region.ref] = "stale"
+                decision = lifecycle_decision(
+                    "deleted",
+                    reason="no_exact_or_high_confidence_fuzzy_match",
+                    confidence=best[1] if best else 0.0,
+                    next_action="refresh_or_remove_label",
+                    candidate_ref=best[0].ref if best else None,
+                )
+                lifecycle_counts[decision.state] += 1
+                lifecycle_by_ref[region.ref] = decision.as_dict()
                 if len(examples["stale"]) < 6:
                     examples["stale"].append({"old_ref": region.ref, "best_similarity": round(best[1], 3) if best else 0.0})
     report = rates(total, counts, examples)
     report["status_by_ref"] = status_by_ref
+    report["lifecycle_state_counts"] = dict(lifecycle_counts)
+    report["lifecycle_by_ref"] = lifecycle_by_ref
     return report
 
 
@@ -616,7 +783,7 @@ def evaluate_eval_label_lifecycle(
     stable_counts = Counter(stable_report["counts"])
     naive_counts = Counter(naive_report["counts"])
     preserved = stable_counts["same_file_exact"] + stable_counts["moved_exact"]
-    review_needed = stable_counts["fuzzy"]
+    review_needed = stable_counts["fuzzy"] + stable_counts["split_support"]
     stale = stable_counts["stale"]
     naive_correct = naive_counts["correct"]
     naive_silent_wrong = naive_counts["wrong_same_id"]
@@ -685,6 +852,34 @@ def evaluate_file_lifecycle(old: dict[str, list[Region]], new: dict[str, list[Re
 def _oracle_validity(stable_report: dict[str, object]) -> dict[str, bool]:
     statuses = dict(stable_report.get("status_by_ref", {}))
     return {ref: status != "stale" for ref, status in statuses.items()}
+
+
+def split_support_match(
+    region: Region,
+    candidates: list[Region],
+    *,
+    min_combined_coverage: float = 0.82,
+    max_regions: int = 3,
+) -> tuple[list[Region], float] | None:
+    query_tokens = token_set(region.text)
+    if not query_tokens:
+        return None
+    ranked: list[tuple[Region, int]] = []
+    for candidate in candidates:
+        overlap = len(query_tokens & token_set(candidate.text))
+        if overlap:
+            ranked.append((candidate, overlap))
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    selected = [candidate for candidate, _overlap in ranked[:max_regions]]
+    if len(selected) < 2:
+        return None
+    combined: set[str] = set()
+    for candidate in selected:
+        combined.update(token_set(candidate.text))
+    coverage = len(query_tokens & combined) / max(len(query_tokens), 1)
+    if coverage >= min_combined_coverage:
+        return selected, coverage
+    return None
 
 
 def _file_fingerprints(regions_by_path: dict[str, list[Region]]) -> dict[str, str]:

@@ -1,0 +1,19 @@
+Onboarding checklist
+====================
+
+New employees need an identity account, a laptop asset tag, VPN enrollment, and
+access to the team documentation space. Contractors receive time-limited VPN
+access and must confirm the end date with their sponsor.
+
+Incident escalation
+===================
+
+Urgent incidents are escalated to the on-call lead. Include impact, affected
+service, first detected time, and whether customer data may be involved.
+
+Incident communication
+======================
+
+For customer-visible incidents, send a status update every thirty minutes until
+the service is stable. The message should include scope, mitigation, and next
+expected update time.

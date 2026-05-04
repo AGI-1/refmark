@@ -3,13 +3,17 @@ import json
 from refmark.pipeline import RegionRecord
 from refmark.rag_adapters import (
     eval_tool_summary,
+    export_document_metadata,
     export_deepeval_cases,
     export_lifecycle_summary_rows,
+    export_qrels_rows,
     export_ragas_rows,
     export_trace_events,
     refmark_evidence_metrics,
+    write_document_metadata_jsonl,
     write_deepeval_jsonl,
     write_lifecycle_tool_jsonl,
+    write_qrels_jsonl,
     write_ragas_jsonl,
     write_trace_jsonl,
 )
@@ -148,6 +152,41 @@ def test_deepeval_and_trace_exports_preserve_refmark_metadata(tmp_path):
     assert trace_rows[0]["attributes"]["refmark.stale"] is False
     assert "refmark.trace_event.v1" in trace_path.read_text(encoding="utf-8")
     assert "retrieval_context" in deepeval_path.read_text(encoding="utf-8")
+
+
+def test_qrels_and_document_metadata_exports_preserve_address_space(tmp_path):
+    corpus = CorpusMap.from_records(
+        [
+            _record("P01", "Refund policy.", 1),
+            _record("P02", "Shipping policy.", 2),
+        ],
+        revision_id="rev-a",
+    )
+    suite = EvalSuite(
+        examples=[
+            EvalExample(
+                "What covers refunds and shipping?",
+                ["policy:P01-policy:P02"],
+                metadata={"query_id": "q-refund-shipping"},
+            ).with_source_hashes(corpus)
+        ],
+        corpus=corpus,
+    )
+    qrels_path = tmp_path / "qrels.jsonl"
+    metadata_path = tmp_path / "metadata.jsonl"
+
+    qrels = export_qrels_rows(suite, run_id="gold")
+    metadata_rows = export_document_metadata(corpus)
+    write_qrels_jsonl(qrels_path, suite, run_id="gold")
+    write_document_metadata_jsonl(metadata_path, corpus)
+
+    assert [row["document_id"] for row in qrels] == ["policy:P01", "policy:P02"]
+    assert qrels[0]["query_id"] == "q-refund-shipping"
+    assert qrels[0]["source_hash"] == "h-P01-14"
+    assert metadata_rows[0]["metadata"]["refmark.ref"] == "policy:P01"
+    assert metadata_rows[0]["metadata"]["refmark.corpus_fingerprint"] == corpus.fingerprint
+    assert "refmark.qrels_row.v1" in qrels_path.read_text(encoding="utf-8")
+    assert "refmark.document_metadata.v1" in metadata_path.read_text(encoding="utf-8")
 
 
 def test_lifecycle_summary_rows_export_as_tracker_events(tmp_path):

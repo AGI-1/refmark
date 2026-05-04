@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
+import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from refmark.rag_eval import CorpusMap, EvalRun, EvalSuite
@@ -45,6 +47,52 @@ class DataSmellReport:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
 
+def compare_data_smell_reports(
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    baseline_name: str = "baseline",
+    current_name: str = "current",
+) -> dict[str, Any]:
+    """Compare two `refmark.data_smells.v1` reports for adaptation loops."""
+
+    _ensure_smell_report(baseline)
+    _ensure_smell_report(current)
+    baseline_summary = dict(baseline.get("summary", {}))
+    current_summary = dict(current.get("summary", {}))
+    baseline_types = _counter_from_mapping(baseline_summary.get("by_type", {}))
+    current_types = _counter_from_mapping(current_summary.get("by_type", {}))
+    baseline_severities = _counter_from_mapping(baseline_summary.get("by_severity", {}))
+    current_severities = _counter_from_mapping(current_summary.get("by_severity", {}))
+    baseline_keys = _smell_keys(baseline)
+    current_keys = _smell_keys(current)
+    delta_by_type = _counter_delta(baseline_types, current_types)
+    delta_by_severity = _counter_delta(baseline_severities, current_severities)
+    smell_delta = int(current_summary.get("smell_count", len(current.get("smells", [])))) - int(
+        baseline_summary.get("smell_count", len(baseline.get("smells", [])))
+    )
+    high_delta = int(current_severities.get("high", 0)) - int(baseline_severities.get("high", 0))
+    return {
+        "schema": "refmark.data_smell_comparison.v1",
+        "baseline": {"name": baseline_name, "summary": baseline_summary},
+        "current": {"name": current_name, "summary": current_summary},
+        "same_corpus": baseline_summary.get("corpus_fingerprint") == current_summary.get("corpus_fingerprint"),
+        "same_run": baseline_summary.get("run_fingerprint") == current_summary.get("run_fingerprint"),
+        "delta": {
+            "smell_count": smell_delta,
+            "high_severity_count": high_delta,
+            "by_type": delta_by_type,
+            "by_severity": delta_by_severity,
+            "metric_hit_at_k": _metric_delta(baseline_summary, current_summary, "metric_hit_at_k"),
+            "metric_gold_coverage": _metric_delta(baseline_summary, current_summary, "metric_gold_coverage"),
+        },
+        "resolved_smells": sorted(baseline_keys - current_keys),
+        "new_smells": sorted(current_keys - baseline_keys),
+        "persistent_smells": sorted(baseline_keys & current_keys),
+        "status": _comparison_status(smell_delta=smell_delta, high_delta=high_delta),
+    }
+
+
 def build_data_smell_report(
     suite: EvalSuite,
     run: EvalRun,
@@ -68,6 +116,9 @@ def build_data_smell_report(
     smells.extend(_over_under_citation_smells(run))
     smells.extend(_low_confidence_smells(run))
     smells.extend(_query_magnet_smells(run, corpus, include_text=include_text, max_text_chars=max_text_chars))
+    smells.extend(_duplicate_support_smells(corpus, include_text=include_text, max_text_chars=max_text_chars))
+    smells.extend(_contradictory_support_smells(corpus, include_text=include_text, max_text_chars=max_text_chars))
+    smells.extend(_uncovered_region_smells(suite, corpus, include_text=include_text, max_text_chars=max_text_chars))
     smells = sorted(smells, key=lambda smell: (_severity_rank(smell.severity), smell.type, ",".join(smell.refs)))[:max_smells]
     summary = _summary(suite, run, smells)
     return DataSmellReport(schema="refmark.data_smells.v1", summary=summary, smells=smells)
@@ -307,6 +358,122 @@ def _query_magnet_smells(run: EvalRun, corpus: CorpusMap, *, include_text: bool,
     return smells
 
 
+def _duplicate_support_smells(corpus: CorpusMap, *, include_text: bool, max_text_chars: int) -> list[DataSmell]:
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for stable_ref, record in corpus.by_stable_ref.items():
+        normalized = " ".join(_content_terms(record.text))
+        if len(normalized) < 40:
+            continue
+        grouped[hashlib.sha256(normalized.encode("utf-8")).hexdigest()].append(stable_ref)
+    smells: list[DataSmell] = []
+    for refs in grouped.values():
+        if len(refs) < 2:
+            continue
+        refs = sorted(refs)
+        smells.append(
+            DataSmell(
+                type="duplicate_support",
+                severity="medium",
+                message="Multiple regions contain the same evidence text.",
+                refs=refs,
+                evidence={
+                    "refs": refs,
+                    "regions": [
+                        _ref_packet(corpus, ref, include_text=include_text, max_text_chars=max_text_chars)
+                        for ref in refs[:6]
+                    ],
+                },
+                suggested_actions=[
+                    "mark_alternate_support_refs",
+                    "merge_or_link_equivalent_sections",
+                    "deduplicate_eval_gold_refs",
+                ],
+            )
+        )
+    return smells
+
+
+def _contradictory_support_smells(corpus: CorpusMap, *, include_text: bool, max_text_chars: int) -> list[DataSmell]:
+    rows = list(corpus.by_stable_ref.items())
+    smells: list[DataSmell] = []
+    for left_index, (left_ref, left_record) in enumerate(rows):
+        left_terms = set(_content_terms(left_record.text))
+        if len(left_terms) < 5:
+            continue
+        left_cues = _conflict_cues(left_record.text)
+        if not left_cues:
+            continue
+        for right_ref, right_record in rows[left_index + 1 :]:
+            right_terms = set(_content_terms(right_record.text))
+            if len(right_terms) < 5:
+                continue
+            right_cues = _conflict_cues(right_record.text)
+            shared = sorted(left_terms & right_terms)
+            if len(shared) < 5 or not _opposing_cues(left_cues, right_cues):
+                continue
+            smells.append(
+                DataSmell(
+                    type="contradictory_support",
+                    severity="medium",
+                    message="Regions share topic terms but contain opposing obligation/permission cues.",
+                    refs=[left_ref, right_ref],
+                    evidence={
+                        "left": _ref_packet(corpus, left_ref, include_text=include_text, max_text_chars=max_text_chars),
+                        "right": _ref_packet(corpus, right_ref, include_text=include_text, max_text_chars=max_text_chars),
+                        "left_cues": sorted(left_cues),
+                        "right_cues": sorted(right_cues),
+                        "shared_terms": shared[:18],
+                    },
+                    suggested_actions=[
+                        "review_for_true_contradiction",
+                        "add_scope_or_date_metadata",
+                        "mark_superseded_or_deprecated_region",
+                    ],
+                )
+            )
+    return smells[:20]
+
+
+def _uncovered_region_smells(
+    suite: EvalSuite,
+    corpus: CorpusMap,
+    *,
+    include_text: bool,
+    max_text_chars: int,
+) -> list[DataSmell]:
+    covered = set()
+    for example in suite.examples:
+        covered.update(corpus.expand_refs(example.gold_refs))
+    uncovered = [ref for ref in sorted(corpus.by_stable_ref) if ref not in covered]
+    if not uncovered:
+        return []
+    uncovered_ratio = len(uncovered) / max(len(corpus.by_stable_ref), 1)
+    severity = "medium" if uncovered_ratio >= 0.4 else "low"
+    samples = [
+        _ref_packet(corpus, ref, include_text=include_text, max_text_chars=max_text_chars)
+        for ref in uncovered[:12]
+    ]
+    return [
+        DataSmell(
+            type="uncovered_region",
+            severity=severity,
+            message="Some corpus regions have no gold eval coverage.",
+            refs=uncovered[:30],
+            evidence={
+                "uncovered_count": len(uncovered),
+                "region_count": len(corpus.by_stable_ref),
+                "uncovered_ratio": round(uncovered_ratio, 4),
+                "samples": samples,
+            },
+            suggested_actions=[
+                "generate_eval_questions_for_uncovered_regions",
+                "mark_low_value_regions_excluded_from_eval",
+                "review_corpus_coverage_targets",
+            ],
+        )
+    ]
+
+
 def _summary(suite: EvalSuite, run: EvalRun, smells: list[DataSmell]) -> dict[str, Any]:
     counts = Counter(smell.type for smell in smells)
     severities = Counter(smell.severity for smell in smells)
@@ -353,3 +520,100 @@ def _ref_packet(corpus: CorpusMap, ref: str, *, include_text: bool, max_text_cha
 
 def _severity_rank(severity: str) -> int:
     return {"high": 0, "medium": 1, "low": 2}.get(severity, 3)
+
+
+def _ensure_smell_report(payload: dict[str, Any]) -> None:
+    if payload.get("schema") != "refmark.data_smells.v1":
+        raise ValueError(f"Unsupported smell report schema: {payload.get('schema')!r}")
+
+
+def _counter_from_mapping(mapping: Any) -> Counter[str]:
+    if not isinstance(mapping, dict):
+        return Counter()
+    return Counter({str(key): int(value) for key, value in mapping.items()})
+
+
+def _counter_delta(baseline: Counter[str], current: Counter[str]) -> dict[str, int]:
+    keys = sorted(set(baseline) | set(current))
+    return {key: int(current.get(key, 0) - baseline.get(key, 0)) for key in keys}
+
+
+def _smell_keys(report: dict[str, Any]) -> set[str]:
+    keys = set()
+    for smell in report.get("smells", []):
+        if not isinstance(smell, dict):
+            continue
+        refs = ",".join(str(ref) for ref in smell.get("refs", []))
+        keys.add(f"{smell.get('type')}|{refs}|{smell.get('message')}")
+    return keys
+
+
+def _metric_delta(baseline: dict[str, Any], current: dict[str, Any], key: str) -> float | None:
+    if key not in baseline and key not in current:
+        return None
+    return round(float(current.get(key, 0.0) or 0.0) - float(baseline.get(key, 0.0) or 0.0), 6)
+
+
+def _comparison_status(*, smell_delta: int, high_delta: int) -> str:
+    if high_delta > 0:
+        return "worse"
+    if smell_delta < 0 or high_delta < 0:
+        return "improved"
+    if smell_delta > 0:
+        return "mixed"
+    return "unchanged"
+
+
+def _content_terms(text: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[A-Za-z0-9_]+", text.lower())
+        if len(token) >= 4 and token not in _SMELL_STOPWORDS
+    ]
+
+
+def _conflict_cues(text: str) -> set[str]:
+    lowered = text.lower()
+    cues: set[str] = set()
+    patterns = {
+        "must": ("must", "required", "shall", "mandatory"),
+        "may": ("may", "optional", "can ", "allowed", "permitted"),
+        "must_not": ("must not", "shall not", "prohibited", "forbidden", "not allowed", "cannot"),
+        "deprecated": ("deprecated", "removed", "no longer", "legacy"),
+        "recommended": ("recommended", "preferred", "best practice"),
+    }
+    for cue, terms in patterns.items():
+        if any(term in lowered for term in terms):
+            cues.add(cue)
+    return cues
+
+
+def _opposing_cues(left: set[str], right: set[str]) -> bool:
+    opposing = ({"must"}, {"may"}), ({"must", "may", "recommended"}, {"must_not", "deprecated"})
+    return any((left & positive and right & negative) or (left & negative and right & positive) for positive, negative in opposing)
+
+
+_SMELL_STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "because",
+    "before",
+    "default",
+    "documentation",
+    "from",
+    "have",
+    "into",
+    "more",
+    "other",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "using",
+    "when",
+    "where",
+    "which",
+    "with",
+}

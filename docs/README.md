@@ -16,6 +16,8 @@ the research history.
 
 ## Core Concepts
 
+- [Address Space Contract](ADDRESS_SPACE_CONTRACT.md): the formal layers,
+  prior-art positioning, and claim discipline behind the public framing.
 - [Range And Citation Semantics](RANGE_AND_CITATION_SEMANTICS.md): inclusive
   citation ranges, edit boundaries, and parser behavior.
 - [Evidence Eval Artifacts](EVIDENCE_EVAL_ARTIFACTS.md): run fingerprints,
@@ -45,6 +47,8 @@ the research history.
 - [Document Provenance](DOCUMENT_PROVENANCE.md): PDF/DOCX extracted-text
   boundaries and provenance caveats.
 - [Project Roadmap](PROJECT_ROADMAP.md): near-, mid-, and long-term work.
+- [Next Goals Tasklist](NEXT_GOALS_TASKLIST.md): living deliverable checklist
+  with test and advisory-review gates.
 - [Research Angles](RESEARCH_ANGLES.md): paper/research directions that should
   stay separate from product claims.
 
@@ -57,3 +61,13 @@ history behind the current roadmap:
 - [BGB Retrieval Experiment Report](BGB_RETRIEVAL_EXPERIMENT_REPORT.md)
 - [Search And Training Findings](SEARCH_AND_TRAINING_FINDINGS.md)
 - [Refmark Benchmarking Notes](REFMARK_BENCHMARKING_NOTES.md)
+
+## Tiny Examples
+
+- [Evidence CI Quickstart](../examples/evidence_ci_quickstart): smallest
+  local `ci` fixture for map/index/eval/compare/smells/adaptation.
+- [Ephemeral Mode Quickstart](../examples/ephemeral_mode_quickstart):
+  disposable refs for one-off contract-style edits.
+- [Heterogeneous Corpus Stress](../examples/heterogeneous_corpus_stress):
+  small mixed-format fixture for query magnets, duplicate support, and uneven
+  source styles.

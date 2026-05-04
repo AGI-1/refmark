@@ -26,6 +26,7 @@ from refmark.lifecycle import (
     Region,
     _file_fingerprints,
     _quote_index,
+    lifecycle_decision,
     load_regions,
     quote_selector,
     safe_name,
@@ -101,6 +102,21 @@ def main() -> None:
     worksheet_parser.add_argument("--limit", type=int, default=50)
     worksheet_parser.add_argument("--text-chars", type=int, default=2200)
 
+    paired_parser = subparsers.add_parser("paired-worksheet", help="Create baseline-vs-Refmark paired review rows.")
+    paired_parser.add_argument("--cards", required=True)
+    paired_parser.add_argument("--judgments", required=True)
+    paired_parser.add_argument("--output-csv", required=True)
+    paired_parser.add_argument("--output-html", default="")
+    paired_parser.add_argument("--limit", type=int, default=50)
+    paired_parser.add_argument("--text-chars", type=int, default=2200)
+    paired_parser.add_argument("--seed", type=int, default=11)
+    paired_parser.add_argument("--blind-labels", action="store_true", help="Show views as A/B while keeping internal review_view for analysis.")
+
+    utility_parser = subparsers.add_parser("utility", help="Summarize filled paired review rows by review view.")
+    utility_parser.add_argument("--input-csv", required=True)
+    utility_parser.add_argument("--output", default="")
+    utility_parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
+
     filled_parser = subparsers.add_parser("filled-html", help="Render a filled human-review CSV as HTML.")
     filled_parser.add_argument("--input-csv", required=True)
     filled_parser.add_argument("--output-html", required=True)
@@ -162,6 +178,34 @@ def main() -> None:
             Path(args.output_html).parent.mkdir(parents=True, exist_ok=True)
             Path(args.output_html).write_text(render_worksheet_html(rows), encoding="utf-8")
         print(json.dumps({"rows": len(rows), "csv": args.output_csv, "html": args.output_html or None}, indent=2))
+    elif args.command == "paired-worksheet":
+        cards = read_jsonl(Path(args.cards))
+        judgments = read_jsonl(Path(args.judgments))
+        rows = paired_review_rows(
+            cards,
+            judgments,
+            limit=args.limit,
+            text_chars=args.text_chars,
+            seed=args.seed,
+            blind_labels=args.blind_labels,
+        )
+        write_worksheet_csv(Path(args.output_csv), rows)
+        if args.output_html:
+            Path(args.output_html).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.output_html).write_text(render_worksheet_html(rows), encoding="utf-8")
+        print(json.dumps({"rows": len(rows), "csv": args.output_csv, "html": args.output_html or None}, indent=2))
+    elif args.command == "utility":
+        rows = read_csv_dicts(Path(args.input_csv))
+        summary = summarize_review_utility(rows)
+        rendered = (
+            json.dumps(summary, indent=2, ensure_ascii=False)
+            if args.format == "json"
+            else render_review_utility_markdown(summary)
+        )
+        if args.output:
+            Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.output).write_text(rendered, encoding="utf-8")
+        print(rendered)
     elif args.command == "filled-html":
         rows = read_csv_dicts(Path(args.input_csv))
         Path(args.output_html).parent.mkdir(parents=True, exist_ok=True)
@@ -276,6 +320,7 @@ def cards_for_revision(
     rng: random.Random,
 ) -> list[dict[str, Any]]:
     stable_status = report["stable_ref_migration"].get("status_by_ref", {})
+    stable_lifecycle = report["stable_ref_migration"].get("lifecycle_by_ref", {})
     new_all = [region for regions in new_regions.values() for region in regions]
     new_by_ref = {artifact_ref(region): region for region in new_all}
     new_by_path_ord = {path: {region.ordinal: region for region in regions} for path, regions in new_regions.items()}
@@ -331,10 +376,20 @@ def cards_for_revision(
         if candidate is None:
             continue
         candidate_ref = artifact_ref(candidate)
+        lifecycle = review_card_lifecycle(
+            stable_lifecycle.get(old_ref),
+            stable=stable,
+            quote_hits=len(quote_hits),
+            candidate_similarity=token_jaccard(old_region.text, candidate.text),
+            quote_decision=quote_decision,
+            layered_decision=layered_decision,
+            review_focus=review_focus,
+            candidate_ref=candidate_ref,
+        )
         card_id = stable_card_id(artifact_path, str(report["new_ref"]), old_ref, review_focus, candidate_ref)
         cards.append(
             {
-                "schema": "refmark.lifecycle_review_card.v1",
+                "schema": "refmark.lifecycle_review_card.v2",
                 "card_id": card_id,
                 "artifact": str(artifact_path),
                 "repo_url": payload.get("repo_url"),
@@ -346,6 +401,11 @@ def cards_for_revision(
                 "candidate_ref": candidate_ref,
                 "candidate_path": candidate.path,
                 "review_focus": review_focus,
+                "lifecycle_state": lifecycle["state"],
+                "lifecycle_reason": lifecycle["reason"],
+                "lifecycle_confidence": lifecycle["confidence"],
+                "lifecycle_priority": lifecycle.get("priority", ""),
+                "suggested_next_action": lifecycle["next_action"],
                 "categories": sorted(set(categories)),
                 "stable_status": stable,
                 "method_decisions": {
@@ -353,7 +413,7 @@ def cards_for_revision(
                     "qrels_source_hash": qrels_decision,
                     "chunk_hash_quote_selector": quote_decision,
                     "refmark_layered_selector": layered_decision,
-                    "refmark_exact_migration": "preserved" if stable in {"same_file_exact", "moved_exact"} else ("review_needed" if stable == "fuzzy" else "true_stale_alert"),
+                    "refmark_exact_migration": "preserved" if stable in {"same_file_exact", "moved_exact"} else ("review_needed" if stable in {"fuzzy", "split_support"} else "true_stale_alert"),
                 },
                 "signals": {
                     "quote_hits": len(quote_hits),
@@ -368,6 +428,69 @@ def cards_for_revision(
             }
         )
     return cards
+
+
+def review_card_lifecycle(
+    stable_lifecycle: dict[str, Any] | None,
+    *,
+    stable: str,
+    quote_hits: int,
+    candidate_similarity: float,
+    quote_decision: str,
+    layered_decision: str,
+    review_focus: str,
+    candidate_ref: str,
+) -> dict[str, Any]:
+    if quote_hits > 1:
+        return lifecycle_decision(
+            "ambiguous",
+            reason="multiple_quote_selector_hits",
+            confidence=0.55,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    if quote_decision == "silent_wrong":
+        return lifecycle_decision(
+            "alternative_support" if candidate_similarity >= 0.82 else "low_confidence",
+            reason="quote_selector_candidate_disagrees_with_refmark_oracle",
+            confidence=candidate_similarity,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    if stable == "split_support":
+        return lifecycle_decision(
+            "split_support",
+            reason="refmark_detected_split_support_candidate",
+            confidence=candidate_similarity,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    if layered_decision == "review_needed" and stable == "fuzzy":
+        return lifecycle_decision(
+            "rewritten",
+            reason="refmark_fuzzy_candidate_below_auto_preserve_gate",
+            confidence=candidate_similarity,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    if layered_decision == "review_needed":
+        return lifecycle_decision(
+            "low_confidence",
+            reason="layered_selector_requires_review",
+            confidence=candidate_similarity,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    if stable_lifecycle:
+        return dict(stable_lifecycle)
+    if stable in {"same_file_exact", "moved_exact"}:
+        return lifecycle_decision(
+            "moved" if stable == "moved_exact" else "unchanged",
+            reason=stable,
+            confidence=1.0,
+            candidate_ref=candidate_ref,
+        ).as_dict()
+    return lifecycle_decision(
+        "deleted" if stable == "stale" else "low_confidence",
+        reason=f"stable_status_{stable}",
+        confidence=candidate_similarity,
+        candidate_ref=candidate_ref,
+    ).as_dict()
 
 
 def artifact_ref(region: Region) -> str:
@@ -391,6 +514,9 @@ def stable_candidate_for(
         matches = [region for region in new_by_ref.values() if region.fingerprint == old_region.fingerprint and region.path != old_region.path]
         return matches[0] if matches else None
     if stable == "fuzzy":
+        best = fuzzy_index.best_match(old_region)
+        return best[0] if best else None
+    if stable == "split_support":
         best = fuzzy_index.best_match(old_region)
         return best[0] if best else None
     return None
@@ -630,10 +756,14 @@ def summarize(cards: list[dict[str, Any]], judgments: list[dict[str, Any]]) -> d
     category_verdicts: dict[str, Counter] = defaultdict(Counter)
     disagreements: list[dict[str, Any]] = []
     method_review: dict[str, Counter] = defaultdict(Counter)
+    lifecycle_states: Counter = Counter()
+    lifecycle_actions: Counter = Counter()
     for card_id, rows in by_card.items():
         card = cards_by_id.get(card_id)
         if not card:
             continue
+        lifecycle_states[str(card.get("lifecycle_state", "unknown"))] += 1
+        lifecycle_actions[str(card.get("suggested_next_action", "unknown"))] += 1
         majority = Counter(row["verdict"] for row in rows).most_common(1)[0][0]
         candidate_valid = majority in {"valid_unchanged", "valid_moved", "valid_rewritten", "split_support", "alternative_valid"}
         for category in card["categories"]:
@@ -659,6 +789,8 @@ def summarize(cards: list[dict[str, Any]], judgments: list[dict[str, Any]]) -> d
         "verdict_counts": dict(verdict_counts),
         "category_majority_verdicts": {category: dict(counter) for category, counter in sorted(category_verdicts.items())},
         "method_implications_on_reviewed_cards": {method: dict(counter) for method, counter in sorted(method_review.items())},
+        "lifecycle_state_counts": dict(lifecycle_states),
+        "suggested_action_counts": dict(lifecycle_actions),
         "model_disagreements": disagreements[:30],
         "model_disagreement_count": len(disagreements),
     }
@@ -687,6 +819,12 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
     lines.extend(["", "## Method Implications On Reviewed Cards", "", "| method | implications |", "| --- | --- |"])
     for method, counts in summary["method_implications_on_reviewed_cards"].items():
         lines.append(f"| {method} | {json.dumps(counts, ensure_ascii=False)} |")
+    lines.extend(["", "## Lifecycle States", "", "| state | count |", "| --- | ---: |"])
+    for state, count in sorted(summary.get("lifecycle_state_counts", {}).items()):
+        lines.append(f"| {state} | {count} |")
+    lines.extend(["", "## Suggested Actions", "", "| action | count |", "| --- | ---: |"])
+    for action, count in sorted(summary.get("suggested_action_counts", {}).items()):
+        lines.append(f"| {action} | {count} |")
     return "\n".join(lines) + "\n"
 
 
@@ -743,6 +881,11 @@ def human_review_rows(
                 "old_path": card.get("old_path", ""),
                 "candidate_path": card.get("candidate_path", ""),
                 "stable_status": card.get("stable_status", ""),
+                "lifecycle_state": card.get("lifecycle_state", ""),
+                "lifecycle_reason": card.get("lifecycle_reason", ""),
+                "lifecycle_confidence": card.get("lifecycle_confidence", ""),
+                "lifecycle_priority": card.get("lifecycle_priority", ""),
+                "suggested_next_action": card.get("suggested_next_action", ""),
                 "method_decisions": json.dumps(card.get("method_decisions", {}), ensure_ascii=False),
                 "signals": json.dumps(card.get("signals", {}), ensure_ascii=False),
                 "llm_rationales": rationale_detail,
@@ -752,6 +895,66 @@ def human_review_rows(
         )
     rows.sort(key=lambda row: (-int(row["priority"]), str(row["corpus"]), str(row["card_id"])))
     return rows[:limit]
+
+
+def paired_review_rows(
+    cards: list[dict[str, Any]],
+    judgments: list[dict[str, Any]],
+    *,
+    limit: int,
+    text_chars: int,
+    seed: int = 11,
+    blind_labels: bool = False,
+) -> list[dict[str, Any]]:
+    base_rows = human_review_rows(cards, judgments, limit=limit, text_chars=text_chars)
+    paired: list[dict[str, Any]] = []
+    rng = random.Random(seed)
+    for row in base_rows:
+        group_id = str(row["card_id"])
+        baseline = dict(row)
+        baseline["review_view"] = "baseline_selector"
+        baseline["review_group_id"] = group_id
+        baseline["view_instructions"] = "Judge using selector evidence only."
+        baseline["lifecycle_state"] = ""
+        baseline["lifecycle_reason"] = ""
+        baseline["lifecycle_confidence"] = ""
+        baseline["lifecycle_priority"] = ""
+        baseline["suggested_next_action"] = "judge_selector_candidate"
+        baseline["method_decisions"] = selector_only_decisions(row.get("method_decisions", ""))
+        baseline["human_seconds"] = ""
+        baseline["human_suggested_action"] = ""
+        baseline["alternative_support_found"] = ""
+        baseline["split_range_repair_needed"] = ""
+
+        refmark = dict(row)
+        refmark["review_view"] = "refmark_lifecycle"
+        refmark["review_group_id"] = group_id
+        refmark["view_instructions"] = "Judge using lifecycle state and selector evidence."
+        refmark["human_seconds"] = ""
+        refmark["human_suggested_action"] = ""
+        refmark["alternative_support_found"] = ""
+        refmark["split_range_repair_needed"] = ""
+        pair = [baseline, refmark]
+        rng.shuffle(pair)
+        for order, item in enumerate(pair, start=1):
+            item["review_order"] = order
+            item["public_review_label"] = f"View {'AB'[order - 1]}" if blind_labels else item["review_view"]
+            if blind_labels:
+                item["view_instructions"] = "Judge whether the candidate evidence preserves, changes, splits, or invalidates the old label."
+            paired.append(item)
+    return paired
+
+
+def selector_only_decisions(raw: object) -> str:
+    try:
+        decisions = json.loads(str(raw or "{}"))
+    except json.JSONDecodeError:
+        return str(raw or "")
+    keep = {
+        "chunk_id_content_hash": decisions.get("chunk_id_content_hash"),
+        "chunk_hash_quote_selector": decisions.get("chunk_hash_quote_selector"),
+    }
+    return json.dumps(keep, ensure_ascii=False)
 
 
 def review_priority(
@@ -791,14 +994,80 @@ def review_priority(
     return score, reasons
 
 
+def summarize_review_utility(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_view: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_view[str(row.get("review_view") or "single")].append(row)
+    views: dict[str, Any] = {}
+    for view, view_rows in sorted(by_view.items()):
+        seconds = [float_or_zero(row.get("human_seconds")) for row in view_rows if str(row.get("human_seconds", "")).strip()]
+        confidences = [float_or_zero(row.get("human_confidence")) for row in view_rows if str(row.get("human_confidence", "")).strip()]
+        verdicts = Counter(str(row.get("human_verdict") or "unfilled") for row in view_rows)
+        actions = Counter(str(row.get("human_suggested_action") or "unfilled") for row in view_rows)
+        views[view] = {
+            "rows": len(view_rows),
+            "filled_verdicts": sum(1 for row in view_rows if str(row.get("human_verdict", "")).strip()),
+            "avg_seconds": round(sum(seconds) / len(seconds), 3) if seconds else None,
+            "avg_confidence": round(sum(confidences) / len(confidences), 3) if confidences else None,
+            "alternative_support_found": sum(1 for row in view_rows if truthy(row.get("alternative_support_found"))),
+            "split_range_repair_needed": sum(1 for row in view_rows if truthy(row.get("split_range_repair_needed"))),
+            "verdicts": dict(verdicts),
+            "human_actions": dict(actions),
+        }
+    return {
+        "schema": "refmark.review_utility_summary.v1",
+        "views": views,
+    }
+
+
+def render_review_utility_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Review Utility Summary",
+        "",
+        "| view | rows | filled | avg seconds | avg confidence | alternative support | split/range repairs | verdicts |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for view, data in summary.get("views", {}).items():
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(view),
+                    str(data.get("rows", 0)),
+                    str(data.get("filled_verdicts", 0)),
+                    "" if data.get("avg_seconds") is None else str(data.get("avg_seconds")),
+                    "" if data.get("avg_confidence") is None else str(data.get("avg_confidence")),
+                    str(data.get("alternative_support_found", 0)),
+                    str(data.get("split_range_repair_needed", 0)),
+                    json.dumps(data.get("verdicts", {}), ensure_ascii=False),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def truthy(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
 def write_worksheet_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "priority",
         "priority_reasons",
+        "review_group_id",
+        "review_order",
+        "public_review_label",
+        "review_view",
+        "view_instructions",
         "card_id",
         "human_verdict",
         "human_confidence",
+        "human_seconds",
+        "human_suggested_action",
+        "alternative_support_found",
+        "split_range_repair_needed",
         "human_notes",
         "llm_majority",
         "llm_votes",
@@ -810,6 +1079,11 @@ def write_worksheet_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "old_path",
         "candidate_path",
         "stable_status",
+        "lifecycle_state",
+        "lifecycle_reason",
+        "lifecycle_confidence",
+        "lifecycle_priority",
+        "suggested_next_action",
         "method_decisions",
         "signals",
         "llm_rationales",
@@ -844,9 +1118,16 @@ def render_worksheet_html(rows: list[dict[str, Any]]) -> str:
   <div class="meta">
     <h2>{index}. {html.escape(row['card_id'])}</h2>
     <p><b>Priority:</b> {html.escape(str(row['priority']))} - {html.escape(row['priority_reasons'])}</p>
+    <p><b>Review view:</b> {html.escape(str(row.get('public_review_label') or row.get('review_view', 'single')))}
+      - {html.escape(str(row.get('view_instructions', '')))}</p>
     <p><b>LLM:</b> {html.escape(row['llm_majority'])} ({html.escape(row['llm_votes'])}) - {html.escape(row['llm_vote_detail'])}</p>
     <p><b>Corpus:</b> {html.escape(row['corpus'])}</p>
     <p><b>Old:</b> {html.escape(row['old_ref'])}<br><b>Candidate:</b> {html.escape(row['candidate_ref'])}</p>
+    <p><b>Lifecycle:</b> {html.escape(str(row.get('lifecycle_state', '')))}
+      ({html.escape(str(row.get('lifecycle_confidence', '')))})
+      priority={html.escape(str(row.get('lifecycle_priority', '')))}
+      - {html.escape(str(row.get('suggested_next_action', '')))}<br>
+      <b>Reason:</b> {html.escape(str(row.get('lifecycle_reason', '')))}</p>
     <p><b>Categories:</b> {html.escape(row['categories'])}</p>
     <details><summary>Signals and method decisions</summary><pre>{html.escape(row['method_decisions'])}
 {html.escape(row['signals'])}</pre></details>
@@ -855,6 +1136,7 @@ def render_worksheet_html(rows: list[dict[str, Any]]) -> str:
   <div class="human">
     <label>Human verdict <select>{options_html}</select></label>
     <label>Confidence <input type="text" placeholder="0.0-1.0"></label>
+    <label>Seconds <input type="text" placeholder="time"></label>
     <label>Notes <textarea rows="4"></textarea></label>
   </div>
   <h3>Side-by-side Evidence Diff</h3>
@@ -885,10 +1167,18 @@ def render_filled_worksheet_html(rows: list[dict[str, Any]]) -> str:
             f"""
 <section class="card {html.escape(str(row.get('human_verdict', '')))}">
   <h2>{index}. {html.escape(row['card_id'])} - {html.escape(row.get('human_verdict', ''))} ({html.escape(row.get('human_confidence', ''))})</h2>
+  <p><b>Review view:</b> {html.escape(str(row.get('public_review_label') or row.get('review_view', 'single')))}
+    - {html.escape(str(row.get('view_instructions', '')))}</p>
+  <p><b>Human seconds/action:</b> {html.escape(str(row.get('human_seconds', '')))} / {html.escape(str(row.get('human_suggested_action', '')))}</p>
   <p><b>Notes:</b> {html.escape(row.get('human_notes', ''))}</p>
   <p><b>LLM:</b> {html.escape(row.get('llm_majority', ''))} {html.escape(row.get('llm_votes', ''))} - {html.escape(row.get('llm_vote_detail', ''))}</p>
   <p><b>Categories:</b> {html.escape(row.get('categories', ''))}</p>
   <p><b>Old:</b> {html.escape(row.get('old_ref', ''))}<br><b>Candidate:</b> {html.escape(row.get('candidate_ref', ''))}</p>
+  <p><b>Lifecycle:</b> {html.escape(str(row.get('lifecycle_state', '')))}
+    ({html.escape(str(row.get('lifecycle_confidence', '')))})
+    priority={html.escape(str(row.get('lifecycle_priority', '')))}
+    - {html.escape(str(row.get('suggested_next_action', '')))}<br>
+    <b>Reason:</b> {html.escape(str(row.get('lifecycle_reason', '')))}</p>
   <details><summary>Signals / decisions</summary><pre>{html.escape(row.get('method_decisions', ''))}
 {html.escape(row.get('signals', ''))}</pre></details>
   <details><summary>LLM rationales</summary><pre>{html.escape(row.get('llm_rationales', ''))}</pre></details>
@@ -1328,11 +1618,11 @@ def trim(text: str, chars: int) -> str:
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
 
 
 def read_csv_dicts(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8", newline="") as handle:
+    with path.open(encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
