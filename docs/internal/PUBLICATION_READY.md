@@ -2,7 +2,7 @@
 
 This note defines the narrow release shape that is supportable by the current evidence.
 
-For the evidence behind this scope, see [Evidence Summary](EVIDENCE_SUMMARY.md).
+For the evidence behind this scope, see [Evidence Summary](../EVIDENCE_SUMMARY.md).
 
 ## Stable Scope To Publish Now
 
@@ -33,9 +33,9 @@ Supported today as the strongest public workflow:
 
 Primary files:
 
-- [QUICKSTART_EVIDENCE_CI.md](QUICKSTART_EVIDENCE_CI.md)
-- [EVIDENCE_RETRIEVAL_PIPELINE.md](EVIDENCE_RETRIEVAL_PIPELINE.md)
-- [PRODUCTION_FEEDBACK_LOOP.md](PRODUCTION_FEEDBACK_LOOP.md)
+- [QUICKSTART_EVIDENCE_CI.md](../QUICKSTART_EVIDENCE_CI.md)
+- [EVIDENCE_RETRIEVAL_PIPELINE.md](../EVIDENCE_RETRIEVAL_PIPELINE.md)
+- [PRODUCTION_FEEDBACK_LOOP.md](../PRODUCTION_FEEDBACK_LOOP.md)
 - `refmark/rag_eval.py`
 - `refmark/feedback.py`
 
@@ -58,7 +58,7 @@ Supported today as a research-backed workflow:
 
 Primary file:
 
-- [CURRENT_BENCHMARK_SNAPSHOT.md](CURRENT_BENCHMARK_SNAPSHOT.md)
+- [Current Benchmark Snapshot](../research/CURRENT_BENCHMARK_SNAPSHOT.md)
 - `refmark/metrics.py`
 
 Public verification command:
@@ -86,8 +86,8 @@ Supported today as a practical audit workflow:
 
 Primary files:
 
-- [GETTING_STARTED.md](GETTING_STARTED.md)
-- [MCP_USAGE.md](MCP_USAGE.md)
+- [GETTING_STARTED.md](../GETTING_STARTED.md)
+- [MCP_USAGE.md](../MCP_USAGE.md)
 - `refmark/highlight.py`
 
 Additional evidence that would help:

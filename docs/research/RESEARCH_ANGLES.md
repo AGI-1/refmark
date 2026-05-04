@@ -110,7 +110,7 @@ Early interpretation:
   stronger hardware because the current pure-Python BM25 loop becomes the
   bottleneck before training or embedding costs matter.
 
-See `docs/REFMARK_BENCHMARKING_NOTES.md` for the current external benchmark
+See `docs/research/REFMARK_BENCHMARKING_NOTES.md` for the current external benchmark
 summary, including vectorized lexical runs and MiniLM/BGE embedding baselines.
 
 ## 3. Corpus Classification and Coarse Navigation

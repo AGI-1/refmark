@@ -21,7 +21,7 @@ the corpus changes, Refmark can classify evidence labels as preserved,
 review-needed, or stale so downstream evaluation rows, citations, and training
 labels do not silently drift.
 
-Short version: evidence recovery becomes measurable.
+In short: Refmark makes evidence recovery measurable.
 
 Refmark is best read as **stable evidence references plus lifecycle metadata**:
 source regions that can be resolved, scored, highlighted, diffed, migrated, or
@@ -93,7 +93,7 @@ See [Address Space Contract](docs/ADDRESS_SPACE_CONTRACT.md) for the formal
 layers and how Refmark relates to qrels, robust anchoring, quote selectors, and
 existing RAG lifecycle tools.
 
-## Positioning
+## What Refmark Adds
 
 Refmark does not claim to invent span ids, quote selectors, qrels, content
 hashes, or robust anchoring. Those are established and useful primitives.
@@ -109,10 +109,6 @@ address-space contract for AI workflows:
   support after corpus revisions;
 - consumers such as RAG eval, citation scoring, review packets, and bounded
   edits share the same refs.
-
-Shorter version:
-
-> Layered selectors solve reattachment. Refmark solves evidence lifecycle.
 
 ## Use Refmark For
 
@@ -132,10 +128,9 @@ Shorter version:
   churn control and anomaly checks.
 - **Production feedback loops:** aggregate real query/click/manual-selection
   events into reviewable alias, confusion, query-magnet, no-answer, and
-  coverage-gap candidates. This surface is useful but still young.
+  coverage-gap candidates.
 - **Portable documentation search demos:** use the same refs and eval metrics
-  to build inspectable local search artifacts. These demos show what the
-  address space enables; they are not a separate core product surface.
+  to build inspectable local search artifacts.
 - **Human-in-the-loop audits:** render highlighted source regions so reviewers
   inspect what a model actually cited.
 - **Ephemeral document workflows:** create a disposable address map for a
@@ -165,7 +160,7 @@ edits. Instead of asking a model to patch drifting line numbers or copied
 context, Refmark lets tools target explicit regions and apply bounded edits
 through `apply_ref_diff`.
 
-## Public Surface
+## What's Included
 
 The stable package surface is intentionally small:
 
@@ -189,9 +184,8 @@ from the core claim. They are useful because the same refs/ranges make their
 successes and failures measurable.
 
 Training, centroid routing, browser search, and new corpus-navigation methods
-are best treated as research or application layers. The product surface is the
-addressable corpus, evidence evaluation, lifecycle validation, data-smell
-diagnostics, integration adapters, and bounded ref-based citation/edit tools.
+build on the same address space. The publishable package keeps those layers
+separate from the core evidence-evaluation and lifecycle APIs.
 
 ## Limitations
 
@@ -600,7 +594,7 @@ the hard zones instead of guessing from answer prose.
 For the artifact contract behind reproducible comparisons, see
 [Evidence Eval Artifacts](docs/EVIDENCE_EVAL_ARTIFACTS.md). For research
 directions that should stay distinct from the core product claim, see
-[Refmark Research Angles](docs/RESEARCH_ANGLES.md).
+[Refmark Research Angles](docs/research/RESEARCH_ANGLES.md).
 For the minimal evidence-CI command path, see
 [Evidence CI Quickstart](docs/QUICKSTART_EVIDENCE_CI.md).
 For the next-term/mid-term/long-term project shape, see
@@ -612,8 +606,8 @@ Recent example work adds the next visible layer of that loop: an evidence
 heatmap/workbench for a FastAPI documentation corpus. It groups regions by the
 existing documentation hierarchy, colors weak and strong retrieval areas,
 highlights matching sections by search term, and pins per-block refs, metrics,
-and eval questions for review. The heatmap is not a separate product claim; it
-is the UI for the same corpus-as-test-suite idea:
+and eval questions for review. It is a UI for the same corpus-as-test-suite
+loop:
 
 ```text
 evaluate -> heatmap hard zones -> reviewer/agent diagnosis
@@ -734,52 +728,30 @@ specialization as a feature rather than a bug. This belongs in research notes
 and articles: it uses the Refmark substrate, but it is not a special product
 surface beyond the existing mapping/eval/lifecycle tools.
 
-## Current Evidence
+## Evidence And Maturity
 
-The current evidence is strongest for:
+The most mature path today is evidence CI for retrieval: map a corpus, attach
+gold refs/ranges to evaluation questions, compare retrieval variants, inspect
+data smells, and validate which labels survive corpus revisions.
 
-- corpus CI for retrieval: `query -> gold refs/ranges`, strategy comparison,
-  stale-label detection, data-smell reports, and review-required adaptation
-  plans
-- lifecycle validation for maintained evidence labels when documentation
-  revisions change
-- deterministic locate-only citation evaluation and human-auditable source
-  review
-- stable same-file anchored edits for bounded Python and TypeScript workflows
-- data-smell diagnostics from wrong-region, broad, and scattered citations
-- lightweight document pipeline primitives such as prompt enrichment, manifest
-  generation, neighbor expansion, and lexical region mapping
+The same address space also supports citation scoring, human review packets,
+ephemeral document edits, and bounded same-file code edits. Training-based
+local navigation, browser search demos, and corpus-specific small models are
+active research/application layers built on top of that substrate.
 
-The current evidence is more limited for:
-
-- broad coding-agent superiority
-- universal efficiency gains
-- exact-minimal citation as a solved problem
-- training-based localization as a proven product path
-
-Existing general LLMs were not specifically trained to use injected anchors.
-In local experiments, useful zero-shot anchor use generally appeared in larger
-open models, while smaller models often struggled with the notation. Some
-bounded SWE-style and multi-diff slices showed positive signals, especially
-for weaker or mid-tier models, but strong coding models were often reliable
-enough without Refmark.
-
-The research hypothesis is that anchors will matter more when they are part of
-the actual training or fine-tuning loop, rather than introduced only at
-inference time. In particular, 4B-14B models trained to understand addressable
-corpora may become better at local information navigation and bounded code
-modification. This artifact is a proof of concept for that path, not proof that
-the hypothesis is already solved.
+For a conservative evidence summary, see
+[Evidence Summary](docs/EVIDENCE_SUMMARY.md). For research directions, see
+[Refmark Research Angles](docs/research/RESEARCH_ANGLES.md).
 
 ## Recommended Reading Order
 
 - [docs/README.md](docs/README.md)
 - [docs/QUICKSTART_EVIDENCE_CI.md](docs/QUICKSTART_EVIDENCE_CI.md)
 - [docs/EVIDENCE_SUMMARY.md](docs/EVIDENCE_SUMMARY.md)
-- [docs/PUBLICATION_READY.md](docs/PUBLICATION_READY.md)
+- [docs/internal/PUBLICATION_READY.md](docs/internal/PUBLICATION_READY.md)
 - [examples/README.md](examples/README.md)
 - [docs/MCP_USAGE.md](docs/MCP_USAGE.md)
-- [docs/RESEARCH_ANGLES.md](docs/RESEARCH_ANGLES.md)
+- [docs/research/RESEARCH_ANGLES.md](docs/research/RESEARCH_ANGLES.md)
 
 ## Reproducibility Notes
 
@@ -805,13 +777,3 @@ The training prototype includes derived datasets and run summaries. Raw and
 normalized source documents are intentionally not redistributed; use
 `refmark_train/pull_source_docs.py` and the source manifests if you need to
 rebuild that corpus from canonical upstream URLs.
-
-## Positioning
-
-Refmark should currently be presented as:
-
-- strong on deterministic locate-only citation evaluation and HiL review
-- practical as a small plug-in layer for cited prompts and region manifests
-- practical for bounded same-file anchored edits
-- promising but still experimental for broader coding-agent claims
-- exploratory on trainable corpus-local anchor prediction

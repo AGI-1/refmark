@@ -9,7 +9,7 @@ the research history.
   `map -> eval -> compare -> smells -> adapt -> manifest diff` workflow.
 - [Evidence Summary](EVIDENCE_SUMMARY.md): conservative claims currently
   backed by reproducible artifacts.
-- [Publication-Ready Scope](PUBLICATION_READY.md): what is stable enough to
+- [Publication-Ready Scope](internal/PUBLICATION_READY.md): what is stable enough to
   publish now and what should stay experimental.
 - [Product Surface](PRODUCT_SURFACE.md): command/API inventory, maturity, and
   non-goals.
@@ -47,9 +47,9 @@ the research history.
 - [Document Provenance](DOCUMENT_PROVENANCE.md): PDF/DOCX extracted-text
   boundaries and provenance caveats.
 - [Project Roadmap](PROJECT_ROADMAP.md): near-, mid-, and long-term work.
-- [Next Goals Tasklist](NEXT_GOALS_TASKLIST.md): living deliverable checklist
+- [Next Goals Tasklist](internal/NEXT_GOALS_TASKLIST.md): living deliverable checklist
   with test and advisory-review gates.
-- [Research Angles](RESEARCH_ANGLES.md): paper/research directions that should
+- [Research Angles](research/RESEARCH_ANGLES.md): paper/research directions that should
   stay separate from product claims.
 
 ## Research Notes
@@ -58,9 +58,9 @@ The BGB, browser search, lifecycle, and training notes are useful context, but
 they are not the first public promise. Read them when you want the experiment
 history behind the current roadmap:
 
-- [BGB Retrieval Experiment Report](BGB_RETRIEVAL_EXPERIMENT_REPORT.md)
-- [Search And Training Findings](SEARCH_AND_TRAINING_FINDINGS.md)
-- [Refmark Benchmarking Notes](REFMARK_BENCHMARKING_NOTES.md)
+- [BGB Retrieval Experiment Report](research/BGB_RETRIEVAL_EXPERIMENT_REPORT.md)
+- [Search And Training Findings](research/SEARCH_AND_TRAINING_FINDINGS.md)
+- [Refmark Benchmarking Notes](research/REFMARK_BENCHMARKING_NOTES.md)
 
 ## Tiny Examples
 

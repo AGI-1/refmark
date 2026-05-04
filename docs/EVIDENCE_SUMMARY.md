@@ -237,9 +237,9 @@ Useful current read:
 - citation localization often recovers the right support neighborhood before it
   recovers exact minimal ranges.
 
-See [Current Benchmark Snapshot](CURRENT_BENCHMARK_SNAPSHOT.md),
-[BGB Retrieval Experiment Report](BGB_RETRIEVAL_EXPERIMENT_REPORT.md), and
-[Search And Training Findings](SEARCH_AND_TRAINING_FINDINGS.md).
+See [Current Benchmark Snapshot](research/CURRENT_BENCHMARK_SNAPSHOT.md),
+[BGB Retrieval Experiment Report](research/BGB_RETRIEVAL_EXPERIMENT_REPORT.md), and
+[Search And Training Findings](research/SEARCH_AND_TRAINING_FINDINGS.md).
 
 ## Claims To Avoid For Now
 

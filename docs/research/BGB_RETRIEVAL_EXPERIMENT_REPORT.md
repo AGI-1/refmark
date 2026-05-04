@@ -1271,7 +1271,7 @@ Not fair yet:
 
 Main documentation:
 
-- `docs/SEARCH_AND_TRAINING_FINDINGS.md`
+- `docs/research/SEARCH_AND_TRAINING_FINDINGS.md`
 - `examples/bgb_browser_search/README.md`
 
 Main scripts:
